@@ -1,0 +1,1381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>California Backpacking Trail Advisor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   CSS VARIABLES — EARTHY TOPO PALETTE
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  --cream: #F5F0E6;
+  --cream-dark: #EDE6D6;
+  --parchment: #FAF7F0;
+  --forest: #2D4A3E;
+  --forest-light: #3A6355;
+  --forest-deep: #1B3129;
+  --sandstone: #C4956A;
+  --sandstone-light: #D4AD87;
+  --terracotta: #B85C38;
+  --terracotta-glow: #D4714D;
+  --slate: #4A5568;
+  --charcoal: #2C2C2C;
+  --ridge: #8B7355;
+  --sky: #7BA7BC;
+  --sky-light: #A8CCDA;
+  --snow: #E8E0D0;
+  --danger: #C53030;
+  --topo-line: rgba(45, 74, 62, 0.07);
+
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'DM Sans', -apple-system, sans-serif;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
+  --shadow-card: 0 2px 8px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.03);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RESET & BASE
+   ═══════════════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { height: 100%; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--cream);
+  color: var(--charcoal);
+  height: 100vh;
+  overflow: hidden;
+  line-height: 1.5;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOPO BACKGROUND — Canvas (marching squares contours)
+   ═══════════════════════════════════════════════════════════════ */
+#topo-bg {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LAYOUT — Full screen split
+   ═══════════════════════════════════════════════════════════════ */
+.app-shell {
+  display: grid;
+  grid-template-columns: 1fr 420px;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+  position: relative;
+  z-index: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HEADER BAR
+   ═══════════════════════════════════════════════════════════════ */
+.header {
+  grid-column: 1 / -1;
+  background: var(--forest-deep);
+  color: var(--cream);
+  padding: 14px 28px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+  z-index: 10;
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-logo svg {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.header h1 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-optical-sizing: auto;
+}
+
+.header-subtitle {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  margin-top: 1px;
+}
+
+.header-stats {
+  margin-left: auto;
+  display: flex;
+  gap: 20px;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.header-stats .stat-val {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+  opacity: 1;
+  color: var(--sandstone-light);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CHAT PANEL — Left side
+   ═══════════════════════════════════════════════════════════════ */
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  overflow: hidden;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scroll-behavior: smooth;
+}
+
+.messages::-webkit-scrollbar { width: 6px; }
+.messages::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb { background: rgba(45,74,62,0.15); border-radius: 3px; }
+
+/* Welcome message */
+.welcome {
+  text-align: center;
+  padding: 48px 32px 32px;
+  animation: fadeUp 0.6s ease-out;
+}
+
+.welcome-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 20px;
+  background: var(--forest);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-md), 0 0 0 6px rgba(45,74,62,0.08);
+}
+
+.welcome-icon svg { width: 36px; height: 36px; }
+
+.welcome h2 {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 500;
+  color: var(--forest);
+  margin-bottom: 8px;
+}
+
+.welcome p {
+  color: var(--slate);
+  font-size: 0.9rem;
+  max-width: 440px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+.quick-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 24px;
+}
+
+.quick-prompt {
+  background: var(--parchment);
+  border: 1px solid rgba(45,74,62,0.1);
+  border-radius: 20px;
+  padding: 8px 16px;
+  font-size: 0.82rem;
+  color: var(--forest);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: var(--font-body);
+}
+
+.quick-prompt:hover {
+  background: var(--forest);
+  color: var(--cream);
+  border-color: var(--forest);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Message bubbles */
+.msg {
+  max-width: 680px;
+  animation: fadeUp 0.3s ease-out;
+}
+
+.msg-user {
+  align-self: flex-end;
+}
+
+.msg-assistant {
+  align-self: flex-start;
+}
+
+.msg-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  margin-bottom: 4px;
+  padding-left: 2px;
+}
+
+.msg-user .msg-label { color: var(--terracotta); text-align: right; padding-right: 2px; }
+.msg-assistant .msg-label { color: var(--forest); }
+
+.msg-bubble {
+  padding: 14px 18px;
+  border-radius: var(--radius-md);
+  line-height: 1.6;
+  font-size: 0.92rem;
+}
+
+.msg-user .msg-bubble {
+  background: var(--forest);
+  color: var(--cream);
+  border-bottom-right-radius: 3px;
+}
+
+.msg-assistant .msg-bubble {
+  background: var(--parchment);
+  border: 1px solid rgba(45,74,62,0.08);
+  box-shadow: var(--shadow-card);
+  border-bottom-left-radius: 3px;
+  color: var(--charcoal);
+}
+
+.msg-bubble p { margin-bottom: 8px; }
+.msg-bubble p:last-child { margin-bottom: 0; }
+.msg-bubble ul, .msg-bubble ol { padding-left: 20px; margin-bottom: 8px; }
+.msg-bubble li { margin-bottom: 4px; }
+.msg-bubble strong { color: var(--forest); font-weight: 600; }
+.msg-bubble code {
+  background: rgba(45,74,62,0.06);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+
+/* Thinking indicator */
+.thinking {
+  display: flex;
+  gap: 6px;
+  padding: 16px 20px;
+}
+
+.thinking-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--forest-light);
+  border-radius: 50%;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* ═══════════════════════════════════════════════════════════════
+   INPUT BAR
+   ═══════════════════════════════════════════════════════════════ */
+.input-bar {
+  padding: 16px 28px 20px;
+  background: linear-gradient(to top, var(--cream) 60%, transparent);
+}
+
+.input-wrapper {
+  display: flex;
+  gap: 10px;
+  background: var(--parchment);
+  border: 2px solid rgba(45,74,62,0.12);
+  border-radius: var(--radius-lg);
+  padding: 6px 6px 6px 18px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-shadow: var(--shadow-sm);
+}
+
+.input-wrapper:focus-within {
+  border-color: var(--forest-light);
+  box-shadow: var(--shadow-md), 0 0 0 3px rgba(45,74,62,0.06);
+}
+
+.input-wrapper textarea {
+  flex: 1;
+  border: none;
+  background: none;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  color: var(--charcoal);
+  resize: none;
+  outline: none;
+  line-height: 1.5;
+  padding: 8px 0;
+  max-height: 120px;
+}
+
+.input-wrapper textarea::placeholder { color: var(--ridge); opacity: 0.6; }
+
+.send-btn {
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--forest);
+  color: var(--cream);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s;
+  align-self: flex-end;
+}
+
+.send-btn:hover { background: var(--forest-light); transform: scale(1.05); }
+.send-btn:active { transform: scale(0.95); }
+.send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+.send-btn svg { width: 18px; height: 18px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   SIDEBAR — Trail detail panel
+   ═══════════════════════════════════════════════════════════════ */
+.sidebar {
+  background: var(--parchment);
+  border-left: 1px solid rgba(45,74,62,0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.04);
+}
+
+.sidebar-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(45,74,62,0.08);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(45,74,62,0.02);
+}
+
+.sidebar-header h3 {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--forest);
+}
+
+.sidebar-header .trail-count {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--ridge);
+  background: rgba(45,74,62,0.06);
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.sidebar-content::-webkit-scrollbar { width: 5px; }
+.sidebar-content::-webkit-scrollbar-thumb { background: rgba(45,74,62,0.12); border-radius: 3px; }
+
+/* Empty state */
+.sidebar-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 32px;
+  text-align: center;
+  color: var(--ridge);
+}
+
+.sidebar-empty svg {
+  width: 48px;
+  height: 48px;
+  opacity: 0.3;
+  margin-bottom: 16px;
+}
+
+.sidebar-empty p {
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TRAIL CARDS
+   ═══════════════════════════════════════════════════════════════ */
+.trail-card {
+  background: white;
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(45,74,62,0.06);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: all 0.2s;
+  animation: fadeUp 0.3s ease-out both;
+}
+
+.trail-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+  border-color: var(--forest-light);
+}
+
+.trail-card-name {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--forest-deep);
+  margin-bottom: 2px;
+}
+
+.trail-card-area {
+  font-size: 0.78rem;
+  color: var(--ridge);
+  margin-bottom: 10px;
+}
+
+.trail-card-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.trail-stat {
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--slate);
+}
+
+.trail-stat svg { width: 14px; height: 14px; opacity: 0.6; }
+
+.trail-stat-val { font-weight: 600; color: var(--charcoal); }
+
+.trail-card-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.feature-tag {
+  font-size: 0.68rem;
+  background: rgba(45,74,62,0.06);
+  color: var(--forest);
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: capitalize;
+}
+
+/* Difficulty badge */
+.diff-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: capitalize;
+}
+
+.diff-easy { background: #C6F6D5; color: #276749; }
+.diff-moderate { background: #FEFCBF; color: #975A16; }
+.diff-hard { background: #FED7D7; color: #9B2C2C; }
+.diff-very-hard { background: #E9D8FD; color: #553C9A; }
+
+/* Rating stars */
+.rating {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--sandstone);
+  font-size: 0.8rem;
+}
+
+.rating svg { width: 13px; height: 13px; fill: var(--sandstone); }
+.rating .review-count { color: var(--ridge); font-size: 0.72rem; margin-left: 2px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   TRAIL DETAIL EXPANDED
+   ═══════════════════════════════════════════════════════════════ */
+.trail-detail {
+  animation: slideIn 0.3s ease-out;
+}
+
+.trail-detail-header {
+  background: var(--forest);
+  color: var(--cream);
+  padding: 20px;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.trail-detail-header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.1;
+  background-image: url("data:image/svg+xml,%3Csvg width='400' height='200' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 150 Q100 100 200 140 Q300 180 400 120' fill='none' stroke='white' stroke-width='1'/%3E%3Cpath d='M0 170 Q100 130 200 160 Q300 200 400 150' fill='none' stroke='white' stroke-width='0.8'/%3E%3Cpath d='M0 130 Q100 80 200 120 Q300 160 400 100' fill='none' stroke='white' stroke-width='0.6'/%3E%3C/svg%3E");
+  background-size: cover;
+}
+
+.trail-detail-header h3 {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 600;
+  position: relative;
+}
+
+.trail-detail-header .area-name {
+  font-size: 0.82rem;
+  opacity: 0.7;
+  margin-top: 2px;
+  position: relative;
+}
+
+.trail-detail-body {
+  background: white;
+  border: 1px solid rgba(45,74,62,0.06);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  padding: 16px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.detail-item {
+  background: var(--cream);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+}
+
+.detail-item-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ridge);
+  margin-bottom: 2px;
+}
+
+.detail-item-value {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--forest);
+}
+
+.detail-section {
+  margin-bottom: 14px;
+}
+
+.detail-section-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ridge);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.weather-row, .aqi-row, .permit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--cream);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+}
+
+.weather-row svg, .aqi-row svg, .permit-row svg { width: 16px; height: 16px; opacity: 0.6; }
+
+.aqi-good { border-left: 3px solid #48BB78; }
+.aqi-moderate { border-left: 3px solid #ECC94B; }
+.aqi-unhealthy { border-left: 3px solid #F56565; }
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--forest);
+  cursor: pointer;
+  padding: 6px 0;
+  margin-bottom: 12px;
+  border: none;
+  background: none;
+  font-family: var(--font-body);
+  transition: opacity 0.2s;
+}
+
+.back-btn:hover { opacity: 0.7; }
+.back-btn svg { width: 16px; height: 16px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════════════════════════════ */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    display: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MARKDOWN RENDERING IN MESSAGES
+   ═══════════════════════════════════════════════════════════════ */
+.msg-bubble h1, .msg-bubble h2, .msg-bubble h3 {
+  font-family: var(--font-display);
+  color: var(--forest);
+  margin: 12px 0 6px;
+}
+.msg-bubble h1 { font-size: 1.15rem; }
+.msg-bubble h2 { font-size: 1.05rem; }
+.msg-bubble h3 { font-size: 0.95rem; }
+.msg-bubble hr { border: none; border-top: 1px solid rgba(45,74,62,0.1); margin: 12px 0; }
+.msg-bubble blockquote {
+  border-left: 3px solid var(--sandstone);
+  padding-left: 12px;
+  color: var(--slate);
+  font-style: italic;
+  margin: 8px 0;
+}
+
+/* Trail photo inside assistant message bubble */
+.msg-trail-photo {
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  display: block;
+  margin-bottom: 12px;
+}
+
+/* Inline trail mention in chat */
+.trail-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(45,74,62,0.08);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  color: var(--forest);
+  cursor: pointer;
+  font-size: 0.88em;
+}
+.trail-mention:hover { background: rgba(45,74,62,0.14); }
+
+/* New chat button */
+.new-chat-btn {
+  background: none;
+  border: 1px solid rgba(245,240,230,0.2);
+  color: var(--cream);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  cursor: pointer;
+  margin-left: 16px;
+  transition: all 0.2s;
+}
+.new-chat-btn:hover { background: rgba(245,240,230,0.1); border-color: rgba(245,240,230,0.3); }
+
+/* Loading skeleton for sidebar */
+.skeleton {
+  background: linear-gradient(90deg, var(--cream-dark) 25%, var(--cream) 50%, var(--cream-dark) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+</style>
+</head>
+<body>
+
+<canvas id="topo-bg" aria-hidden="true"></canvas>
+<div class="app-shell">
+  <!-- ═══ HEADER ═══ -->
+  <header class="header">
+    <div class="header-logo">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M16 3L3 28h26L16 3z" fill="#C4956A" opacity="0.3"/>
+        <path d="M16 8L6 28h20L16 8z" fill="#3A6355"/>
+        <path d="M16 8l-5 12h10L16 8z" fill="#2D4A3E"/>
+        <circle cx="16" cy="6" r="2" fill="#F5F0E6"/>
+        <path d="M11 22l2-4 3 2 2-3 3 5H11z" fill="#1B3129" opacity="0.3"/>
+      </svg>
+      <div>
+        <h1>California Trail Advisor</h1>
+        <div class="header-subtitle">1,194 backpacking trails · Weather · AQI · Permits</div>
+      </div>
+    </div>
+    <button class="new-chat-btn" onclick="resetChat()">+ New Chat</button>
+    <div class="header-stats" id="headerStats"></div>
+  </header>
+
+  <!-- ═══ CHAT PANEL ═══ -->
+  <main class="chat-panel">
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">
+          <svg viewBox="0 0 36 36" fill="none">
+            <path d="M18 4L4 32h28L18 4z" fill="#C4956A" opacity="0.4"/>
+            <path d="M18 10L8 32h20L18 10z" fill="#F5F0E6"/>
+            <path d="M18 10l-4 10h8L18 10z" fill="#EDE6D6"/>
+            <path d="M12 26l2-4 4 3 4-5 4 6H12z" fill="#C4956A" opacity="0.3"/>
+          </svg>
+        </div>
+        <h2>Where will the trail take you?</h2>
+        <p>I'm your California backpacking advisor. Tell me about your ideal trip — region, difficulty, length, or what kind of scenery you're after — and I'll find the perfect trail.</p>
+        <div class="quick-prompts">
+          <button class="quick-prompt" onclick="sendQuick(this)">Find me a 3-day loop in Yosemite</button>
+          <button class="quick-prompt" onclick="sendQuick(this)">Best beginner backpacking near Big Sur</button>
+          <button class="quick-prompt" onclick="sendQuick(this)">Hard trails with lakes in the Sierra Nevada</button>
+          <button class="quick-prompt" onclick="sendQuick(this)">What's the weather like for Mt. Whitney?</button>
+        </div>
+      </div>
+    </div>
+    <div class="input-bar">
+      <div class="input-wrapper">
+        <textarea id="userInput" rows="1" placeholder="Describe your ideal backpacking trip..." onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--forest)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
+        <circle cx="12" cy="10" r="3"/>
+      </svg>
+      <h3>Trail Explorer</h3>
+      <span class="trail-count" id="trailCount">—</span>
+    </div>
+    <div class="sidebar-content" id="sidebarContent">
+      <div class="sidebar-empty" id="sidebarEmpty">
+        <svg viewBox="0 0 48 48" fill="none" stroke="var(--ridge)" stroke-width="1.5">
+          <path d="M8 40L20 12l8 16 12-20"/>
+          <circle cx="20" cy="12" r="2"/>
+        </svg>
+        <p>Ask about trails and they'll appear here with details, weather, and conditions.</p>
+      </div>
+      <div id="sidebarTrails"></div>
+      <div id="trailDetail" style="display:none"></div>
+    </div>
+  </aside>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   STATE
+   ═══════════════════════════════════════════════════════════════ */
+const sessionId = 'session_' + Math.random().toString(36).slice(2, 10);
+let isLoading = false;
+let allTrails = [];
+let mentionedTrails = [];
+
+/* ═══════════════════════════════════════════════════════════════
+   INIT
+   ═══════════════════════════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const [statsRes, trailsRes] = await Promise.all([
+      fetch('/api/trails/stats'),
+      fetch('/api/trails'),
+    ]);
+    const stats = await statsRes.json();
+    allTrails = await trailsRes.json();
+
+    document.getElementById('headerStats').innerHTML = `
+      <div><span class="stat-val">${stats.total_trails.toLocaleString()}</span> trails</div>
+      <div><span class="stat-val">${stats.total_areas}</span> areas</div>
+    `;
+    document.getElementById('trailCount').textContent = `${stats.total_trails.toLocaleString()} trails`;
+  } catch (e) {
+    console.warn('Could not load stats:', e);
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   CHAT
+   ═══════════════════════════════════════════════════════════════ */
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function sendQuick(btn) {
+  document.getElementById('userInput').value = btn.textContent;
+  sendMessage();
+}
+
+async function sendMessage() {
+  const input = document.getElementById('userInput');
+  const text = input.value.trim();
+  if (!text || isLoading) return;
+
+  // Hide welcome
+  const welcome = document.getElementById('welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  // Add user message
+  appendMessage('user', text);
+  input.value = '';
+  input.style.height = 'auto';
+
+  // Show thinking
+  const thinkingEl = showThinking();
+  isLoading = true;
+  document.getElementById('sendBtn').disabled = true;
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, session_id: sessionId }),
+    });
+    const data = await res.json();
+    thinkingEl.remove();
+
+    if (data.error) {
+      appendMessage('assistant', `⚠ ${data.error}\n\nMake sure Ollama is running: \`ollama serve\``);
+    } else {
+      appendMessage('assistant', data.response, data.photo_url || null);
+      extractTrailMentions(data.response);
+    }
+  } catch (err) {
+    thinkingEl.remove();
+    appendMessage('assistant', `Connection error — is the server running?\n\n\`python3 server.py\``);
+  }
+
+  isLoading = false;
+  document.getElementById('sendBtn').disabled = false;
+}
+
+function appendMessage(role, text, photoUrl) {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `msg msg-${role}`;
+
+  const label = role === 'user' ? 'You' : 'Advisor';
+  const photoHtml = (role === 'assistant' && photoUrl)
+    ? `<img class="msg-trail-photo" src="${escapeHtml(photoUrl)}" alt="Trail photo" loading="lazy">`
+    : '';
+
+  div.innerHTML = `
+    <div class="msg-label">${label}</div>
+    <div class="msg-bubble">${photoHtml}${role === 'assistant' ? renderMarkdown(text) : escapeHtml(text)}</div>
+  `;
+
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function showThinking() {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg msg-assistant';
+  div.innerHTML = `
+    <div class="msg-label">Advisor</div>
+    <div class="msg-bubble">
+      <div class="thinking">
+        <div class="thinking-dot"></div>
+        <div class="thinking-dot"></div>
+        <div class="thinking-dot"></div>
+      </div>
+    </div>
+  `;
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+  return div;
+}
+
+async function resetChat() {
+  try {
+    await fetch('/api/chat/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  } catch (e) {}
+
+  const messages = document.getElementById('messages');
+  messages.innerHTML = '';
+
+  // Recreate welcome
+  const welcome = document.createElement('div');
+  welcome.className = 'welcome';
+  welcome.id = 'welcome';
+  welcome.innerHTML = `
+    <div class="welcome-icon">
+      <svg viewBox="0 0 36 36" fill="none">
+        <path d="M18 4L4 32h28L18 4z" fill="#C4956A" opacity="0.4"/>
+        <path d="M18 10L8 32h20L18 10z" fill="#F5F0E6"/>
+        <path d="M18 10l-4 10h8L18 10z" fill="#EDE6D6"/>
+        <path d="M12 26l2-4 4 3 4-5 4 6H12z" fill="#C4956A" opacity="0.3"/>
+      </svg>
+    </div>
+    <h2>Where will the trail take you?</h2>
+    <p>I'm your California backpacking advisor. Tell me about your ideal trip — region, difficulty, length, or what kind of scenery you're after — and I'll find the perfect trail.</p>
+    <div class="quick-prompts">
+      <button class="quick-prompt" onclick="sendQuick(this)">Find me a 3-day loop in Yosemite</button>
+      <button class="quick-prompt" onclick="sendQuick(this)">Best beginner backpacking near Big Sur</button>
+      <button class="quick-prompt" onclick="sendQuick(this)">Hard trails with lakes in the Sierra Nevada</button>
+      <button class="quick-prompt" onclick="sendQuick(this)">What's the weather like for Mt. Whitney?</button>
+    </div>
+  `;
+  messages.appendChild(welcome);
+
+  // Clear sidebar
+  document.getElementById('sidebarTrails').innerHTML = '';
+  document.getElementById('trailDetail').style.display = 'none';
+  document.getElementById('sidebarEmpty').style.display = '';
+  mentionedTrails = [];
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TRAIL EXTRACTION & SIDEBAR
+   ═══════════════════════════════════════════════════════════════ */
+function extractTrailMentions(text) {
+  if (!allTrails.length) return;
+
+  const found = [];
+  for (const trail of allTrails) {
+    if (text.toLowerCase().includes(trail.name.toLowerCase()) && !mentionedTrails.find(t => t.id === trail.id)) {
+      found.push(trail);
+      mentionedTrails.push(trail);
+    }
+  }
+
+  if (found.length > 0) {
+    document.getElementById('sidebarEmpty').style.display = 'none';
+    const container = document.getElementById('sidebarTrails');
+    for (const trail of found) {
+      container.insertAdjacentHTML('afterbegin', renderTrailCard(trail));
+    }
+  }
+}
+
+function renderTrailCard(trail) {
+  const diffClass = trail.difficulty.replace(' ', '-');
+  const stars = '★'.repeat(Math.round(trail.avg_rating)) + '☆'.repeat(5 - Math.round(trail.avg_rating));
+  const features = (trail.features || []).slice(0, 4);
+
+  return `
+    <div class="trail-card" onclick="showTrailDetail('${trail.id}')" style="animation-delay: ${Math.random() * 0.15}s">
+      <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:6px">
+        <div>
+          <div class="trail-card-name">${escapeHtml(trail.name)}</div>
+          <div class="trail-card-area">${escapeHtml(trail.area)} · ${escapeHtml(trail.city)}</div>
+        </div>
+        <span class="diff-badge diff-${diffClass}">${trail.difficulty}</span>
+      </div>
+      <div class="trail-card-stats">
+        <div class="trail-stat">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <span class="trail-stat-val">${trail.length_miles} mi</span>
+        </div>
+        <div class="trail-stat">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          <span class="trail-stat-val">+${trail.elev_gain_ft.toLocaleString()} ft</span>
+        </div>
+        <div class="trail-stat">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          <span class="trail-stat-val">${trail.route_type}</span>
+        </div>
+        <div class="rating">
+          <span style="color:var(--sandstone);font-size:0.78rem">${stars}</span>
+          <span class="review-count">(${trail.num_reviews.toLocaleString()})</span>
+        </div>
+      </div>
+      ${features.length ? `
+        <div class="trail-card-features">
+          ${features.map(f => `<span class="feature-tag">${escapeHtml(f)}</span>`).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function showTrailDetail(trailId) {
+  const trail = allTrails.find(t => t.id === trailId) || mentionedTrails.find(t => t.id === trailId);
+  if (!trail) return;
+
+  const container = document.getElementById('trailDetail');
+  const trailsContainer = document.getElementById('sidebarTrails');
+  trailsContainer.style.display = 'none';
+  container.style.display = '';
+
+  const diffClass = trail.difficulty.replace(' ', '-');
+  const stars = '★'.repeat(Math.round(trail.avg_rating)) + '☆'.repeat(5 - Math.round(trail.avg_rating));
+
+  container.innerHTML = `
+    <div class="trail-detail">
+      <button class="back-btn" onclick="hideTrailDetail()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        Back to results
+      </button>
+      <div class="trail-detail-header">
+        <h3>${escapeHtml(trail.name)}</h3>
+        <div class="area-name">${escapeHtml(trail.area)} · ${escapeHtml(trail.city)}</div>
+      </div>
+      <div class="trail-detail-body">
+        <div class="detail-grid">
+          <div class="detail-item">
+            <div class="detail-item-label">Distance</div>
+            <div class="detail-item-value">${trail.length_miles} mi</div>
+          </div>
+          <div class="detail-item">
+            <div class="detail-item-label">Elevation Gain</div>
+            <div class="detail-item-value">+${trail.elev_gain_ft.toLocaleString()} ft</div>
+          </div>
+          <div class="detail-item">
+            <div class="detail-item-label">Difficulty</div>
+            <div class="detail-item-value"><span class="diff-badge diff-${diffClass}">${trail.difficulty}</span></div>
+          </div>
+          <div class="detail-item">
+            <div class="detail-item-label">Route Type</div>
+            <div class="detail-item-value" style="text-transform:capitalize">${trail.route_type}</div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">Rating</div>
+          <div class="rating" style="font-size:1rem">
+            <span style="color:var(--sandstone)">${stars}</span>
+            <span style="font-weight:600;color:var(--charcoal);margin-left:4px">${trail.avg_rating}</span>
+            <span class="review-count">(${trail.num_reviews.toLocaleString()} reviews)</span>
+          </div>
+        </div>
+
+        ${trail.features && trail.features.length ? `
+          <div class="detail-section">
+            <div class="detail-section-title">Features</div>
+            <div class="trail-card-features">
+              ${trail.features.map(f => `<span class="feature-tag">${escapeHtml(f)}</span>`).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        <div class="detail-section">
+          <div class="detail-section-title">Coordinates</div>
+          <div style="font-size:0.85rem;color:var(--slate)">${trail.lat.toFixed(4)}, ${trail.lng.toFixed(4)}</div>
+        </div>
+
+        <div class="detail-section" id="weatherSection">
+          <div class="detail-section-title">Weather</div>
+          <div class="weather-row" id="weatherData">
+            <div class="skeleton" style="width:100%;height:20px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Fetch weather
+  fetchWeather(trail.lat, trail.lng);
+}
+
+async function fetchWeather(lat, lng) {
+  try {
+    const res = await fetch(`https://api.weather.gov/points/${lat},${lng}`, {
+      headers: { 'User-Agent': 'trails-web/1.0' }
+    });
+    const data = await res.json();
+    const forecastUrl = data.properties.forecast;
+
+    const res2 = await fetch(forecastUrl, {
+      headers: { 'User-Agent': 'trails-web/1.0' }
+    });
+    const forecast = await res2.json();
+    const periods = forecast.properties.periods.slice(0, 4);
+
+    const weatherEl = document.getElementById('weatherData');
+    if (!weatherEl) return;
+
+    weatherEl.innerHTML = '';
+    const section = document.getElementById('weatherSection');
+    section.innerHTML = `<div class="detail-section-title">Weather Forecast</div>`;
+
+    for (const p of periods) {
+      section.insertAdjacentHTML('beforeend', `
+        <div class="weather-row">
+          <span style="font-weight:600;min-width:80px;color:var(--forest)">${p.name}</span>
+          <span>${p.shortForecast}</span>
+          <span style="margin-left:auto;font-weight:600">${p.temperature}°${p.temperatureUnit}</span>
+        </div>
+      `);
+    }
+  } catch (e) {
+    const weatherEl = document.getElementById('weatherData');
+    if (weatherEl) weatherEl.innerHTML = '<span style="color:var(--ridge);font-size:0.85rem">Weather data unavailable for this location</span>';
+  }
+}
+
+function hideTrailDetail() {
+  document.getElementById('trailDetail').style.display = 'none';
+  document.getElementById('sidebarTrails').style.display = '';
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   UTILS
+   ═══════════════════════════════════════════════════════════════ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOPOGRAPHIC MAP BACKGROUND — marching squares on canvas
+   ═══════════════════════════════════════════════════════════════ */
+(function initTopo() {
+  const canvas = document.getElementById('topo-bg');
+  const ctx = canvas.getContext('2d');
+
+  // Gaussian hills: normalized coords, ellipse axes, rotation angle, peak height
+  const HILLS = [
+    { x: 0.15, y: 0.25, ax: 0.30, ay: 0.22, rot:  0.30, h: 1.00 },
+    { x: 0.74, y: 0.60, ax: 0.32, ay: 0.25, rot: -0.50, h: 0.88 },
+    { x: 0.48, y: 0.88, ax: 0.26, ay: 0.19, rot:  0.75, h: 0.72 },
+    { x: 0.90, y: 0.14, ax: 0.22, ay: 0.17, rot: -0.20, h: 0.64 },
+    { x: 0.30, y: 0.54, ax: 0.38, ay: 0.28, rot:  0.58, h: 0.52 },
+    { x: 0.62, y: 0.32, ax: 0.20, ay: 0.16, rot:  1.10, h: 0.45 },
+  ];
+
+  // Marching squares: (TL|TR|BL|BR) → list of [edge1,edge2] pairs to draw
+  // Bits: 1=TL, 2=TR, 4=BL, 8=BR
+  const MS = {
+     1: [['T','L']],
+     2: [['T','R']],
+     3: [['L','R']],
+     4: [['L','B']],
+     5: [['T','B']],
+     6: [['T','R'],['L','B']],  // saddle — resolve to separate peaks
+     7: [['R','B']],
+     8: [['R','B']],
+     9: [['T','L'],['R','B']],  // saddle
+    10: [['T','B']],
+    11: [['L','B']],
+    12: [['L','R']],
+    13: [['T','R']],
+    14: [['T','L']],
+  };
+
+  const RES = 5;        // pixels per grid cell — controls detail vs performance
+  const N_LEVELS = 20;  // total contour levels
+  const INDEX_NTH = 5;  // every Nth is an index (bolder) contour
+
+  function buildField(cols, rows) {
+    const f = new Float32Array(cols * rows);
+    let max = 0;
+    for (let r = 0; r < rows; r++) {
+      const ny = r / (rows - 1);
+      for (let c = 0; c < cols; c++) {
+        const nx = c / (cols - 1);
+        let h = 0;
+        for (const hill of HILLS) {
+          const dx = nx - hill.x, dy = ny - hill.y;
+          const cos = Math.cos(hill.rot), sin = Math.sin(hill.rot);
+          const rx = dx * cos + dy * sin;
+          const ry = -dx * sin + dy * cos;
+          h += hill.h * Math.exp(-((rx / hill.ax) ** 2 + (ry / hill.ay) ** 2) * 3.5);
+        }
+        f[r * cols + c] = h;
+        if (h > max) max = h;
+      }
+    }
+    if (max > 0) for (let i = 0; i < f.length; i++) f[i] /= max;
+    return f;
+  }
+
+  function draw() {
+    const W = canvas.width  = window.innerWidth;
+    const H = canvas.height = window.innerHeight;
+    const cols = Math.ceil(W / RES) + 1;
+    const rows = Math.ceil(H / RES) + 1;
+    const field = buildField(cols, rows);
+
+    ctx.clearRect(0, 0, W, H);
+
+    for (let li = 1; li <= N_LEVELS; li++) {
+      const threshold = li / (N_LEVELS + 1);
+      const isIndex   = li % INDEX_NTH === 0;
+
+      ctx.beginPath();
+      ctx.strokeStyle = isIndex ? 'rgba(45,74,62,0.16)' : 'rgba(45,74,62,0.072)';
+      ctx.lineWidth   = isIndex ? 0.9 : 0.5;
+
+      for (let r = 0; r < rows - 1; r++) {
+        for (let c = 0; c < cols - 1; c++) {
+          const hTL = field[ r      * cols + c    ];
+          const hTR = field[ r      * cols + c + 1];
+          const hBL = field[(r + 1) * cols + c    ];
+          const hBR = field[(r + 1) * cols + c + 1];
+
+          const state = (hTL >= threshold ? 1 : 0)
+                      | (hTR >= threshold ? 2 : 0)
+                      | (hBL >= threshold ? 4 : 0)
+                      | (hBR >= threshold ? 8 : 0);
+          const segs = MS[state];
+          if (!segs) continue;
+
+          const x0 = c * RES, x1 = (c + 1) * RES;
+          const y0 = r * RES, y1 = (r + 1) * RES;
+
+          function ei(h1, h2) {
+            return Math.abs(h2 - h1) < 1e-9 ? 0.5 : (threshold - h1) / (h2 - h1);
+          }
+          const P = {
+            T: [x0 + ei(hTL, hTR) * RES, y0],
+            R: [x1, y0 + ei(hTR, hBR) * RES],
+            B: [x0 + ei(hBL, hBR) * RES, y1],
+            L: [x0, y0 + ei(hTL, hBL) * RES],
+          };
+
+          for (const [e1, e2] of segs) {
+            ctx.moveTo(P[e1][0], P[e1][1]);
+            ctx.lineTo(P[e2][0], P[e2][1]);
+          }
+        }
+      }
+      ctx.stroke();
+    }
+  }
+
+  draw();
+  window.addEventListener('resize', draw);
+})();
+
+function renderMarkdown(text) {
+  // Simple markdown renderer
+  let html = escapeHtml(text);
+
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Bold & italic
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Inline code
+  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr>');
+
+  // Unordered lists
+  html = html.replace(/^[•\-\*] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+  // Blockquotes
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Paragraphs — convert double newlines
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+
+  // Clean up empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
+  html = html.replace(/<p>\s*(<h[123]>)/g, '$1');
+  html = html.replace(/(<\/h[123]>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*(<ul>)/g, '$1');
+  html = html.replace(/(<\/ul>)\s*<\/p>/g, '$1');
+  html = html.replace(/<p>\s*(<hr>)\s*<\/p>/g, '$1');
+
+  // Single newlines to <br>
+  html = html.replace(/\n/g, '<br>');
+
+  return html;
+}
+</script>
+</body>
+</html>
