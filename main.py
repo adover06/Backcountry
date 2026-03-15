@@ -70,7 +70,7 @@ def main():
         console.print()
         with console.status("[cyan]Thinking...[/cyan]", spinner="dots"):
             try:
-                response, history = agent.run(user_input, history)
+                response, history, _prefs = agent.run(user_input, history)
             except Exception as e:
                 console.print(f"[red]Agent error:[/red] {e}")
                 console.print("[dim]Make sure Ollama is running: [bold]ollama serve[/bold][/dim]")

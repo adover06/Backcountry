@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Backcountry Agent Graph</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <style>
+    body { font-family: sans-serif; background: #1a1a2e; color: #eee; display: flex; flex-direction: column; align-items: center; padding: 40px; }
+    h1 { color: #a8d5a2; margin-bottom: 8px; }
+    p  { color: #aaa; margin-bottom: 32px; font-size: 14px; }
+    .mermaid { background: #fff; border-radius: 12px; padding: 32px; max-width: 900px; width: 100%; }
+    .legend { margin-top: 24px; display: flex; gap: 24px; font-size: 13px; }
+    .legend span { display: flex; align-items: center; gap: 6px; }
+    .dot  { width: 12px; height: 12px; border-radius: 50%; }
+    .solid { width: 30px; height: 2px; background: #555; }
+    .dashed { width: 30px; height: 0; border-top: 2px dashed #999; }
+  </style>
+</head>
+<body>
+  <h1>Backcountry Agent — LangGraph Structure</h1>
+  <p>Dashed arrows = conditional routing &nbsp;|&nbsp; Solid arrows = deterministic sequence</p>
+  <div class="mermaid">
+graph TD;
+    __start__([START]):::first
+    gather_llm(gather_llm\nLLM: set_preferences / trigger_search)
+    tool_exec(tool_exec\nExecutes tool calls + updates prefs)
+    search_node(search_node\nDeterministic: search_trails_raw)
+    weather_node(weather_node\nDeterministic: get_weather)
+    permit_node(permit_node\nDeterministic: get_permit_info)
+    photo_node(photo_node\nDeterministic: get_trail_photo)
+    recommend_node(recommend_node\nLLM: generate final recommendation)
+    __end__([END]):::last
+
+    __start__ --> gather_llm
+    gather_llm -.->|no tool calls| __end__
+    gather_llm -.->|tool calls| tool_exec
+    tool_exec -.->|set_preferences called| gather_llm
+    tool_exec -.->|trigger_search called| search_node
+    search_node --> weather_node
+    weather_node --> permit_node
+    permit_node --> photo_node
+    photo_node --> recommend_node
+    recommend_node --> __end__
+
+    classDef default fill:#e8e4ff,stroke:#7c6fcd,color:#333,line-height:1.4
+    classDef first fill:#d4edda,stroke:#5cb85c,color:#155724
+    classDef last fill:#d4edda,stroke:#5cb85c,color:#155724
+    classDef phase2 fill:#fff3cd,stroke:#ffc107,color:#333
+    class search_node,weather_node,permit_node,photo_node phase2
+  </div>
+  <div class="legend">
+    <span><div class="dashed"></div> Conditional edge (routing function decides)</span>
+    <span><div class="solid"></div> Deterministic edge (always executes)</span>
+    <span><div class="dot" style="background:#e8e4ff;border:2px solid #7c6fcd"></div> Phase 1 (gather)</span>
+    <span><div class="dot" style="background:#fff3cd;border:2px solid #ffc107"></div> Phase 2 (recommend)</span>
+  </div>
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'default' });</script>
+</body>
+</html>

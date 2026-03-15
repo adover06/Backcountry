@@ -51,12 +51,13 @@ def _normalize(trail: dict) -> dict:
 
 
 def load_backpacking_trails() -> list[dict]:
-    """Return all CA trails that include backpacking as an activity."""
+    """Return all CA trails that include hiking or backpacking as an activity."""
     with open(_SOURCE) as f:
         raw = json.load(f)
+    acts = {"backpacking", "hiking"}
     return [
         _normalize(t) for t in raw
-        if "backpacking" in t.get("activities", [])
+        if acts.intersection(t.get("activities", []))
     ]
 
 

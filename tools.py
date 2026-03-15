@@ -50,7 +50,7 @@ def set_preferences(
 
 # ─── Trail Search ─────────────────────────────────────────────────────────────
 
-def search_trails(
+def search_trails_raw(
     region: str = "",
     difficulty: str = "",
     min_miles: float = 0,
@@ -60,9 +60,9 @@ def search_trails(
     features: list[str] = [],
     route_type: str = "",
     top_n: int = 3,
-) -> str:
+) -> list[dict]:
     """
-    Filter backpacking trails and return the top matches.
+    Same filtering logic as search_trails but returns list[dict] instead of a formatted string.
 
     Args:
         region:      Area name or city to filter by (e.g. 'Yosemite', 'Sierra Nevada').
@@ -73,7 +73,7 @@ def search_trails(
         max_elev_ft: Maximum elevation gain in feet.
         features:    List of desired features e.g. ['views', 'water', 'camping'].
         route_type:  'loop', 'out-and-back', or 'point-to-point'.
-        top_n:       Number of results to return (default 8).
+        top_n:       Number of results to return.
     """
     trails = get_trails()
 
@@ -122,7 +122,35 @@ def search_trails(
         reverse=True,
     )
 
-    results = trails[:top_n]
+    return trails[:top_n]
+
+
+def search_trails(
+    region: str = "",
+    difficulty: str = "",
+    min_miles: float = 0,
+    max_miles: float = 999,
+    min_elev_ft: int = 0,
+    max_elev_ft: int = 99999,
+    features: list[str] = [],
+    route_type: str = "",
+    top_n: int = 3,
+) -> str:
+    """
+    Filter backpacking trails and return the top matches.
+
+    Args:
+        region:      Area name or city to filter by (e.g. 'Yosemite', 'Sierra Nevada').
+        difficulty:  'easy', 'moderate', 'hard', or 'very hard'.
+        min_miles:   Minimum trail length in miles.
+        max_miles:   Maximum trail length in miles.
+        min_elev_ft: Minimum elevation gain in feet.
+        max_elev_ft: Maximum elevation gain in feet.
+        features:    List of desired features e.g. ['views', 'water', 'camping'].
+        route_type:  'loop', 'out-and-back', or 'point-to-point'.
+        top_n:       Number of results to return (default 8).
+    """
+    results = search_trails_raw(region, difficulty, min_miles, max_miles, min_elev_ft, max_elev_ft, features, route_type, top_n)
     if not results:
         return "No trails found matching those criteria. Try broadening the filters."
 
