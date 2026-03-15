@@ -20,60 +20,61 @@ _NARRATED_TOOL_CALL_PATTERNS = re.compile(
 )
 
 OLLAMA_BASE = "http://100.86.195.79:11434/v1"
-MODEL = "mistral"  # swap to any model you have: `ollama list`
+MODEL = "qwen3"  # swap to any model you have: `ollama list`
 
 SYSTEM_PROMPT = """\
-You are a friendly California backpacking trail advisor. Your job is to learn what the user wants through conversation, then find the perfect trail once they're ready.
+You are Backcountry, a California backpacking trail advisor. You help users find the perfect trail through friendly conversation.
 
-## PHASE 1 — GATHERING PREFERENCES (default mode)
+## PHASE 1 — GATHER PREFERENCES (default phase)
 
-Your goal is to learn the user's trip preferences through natural conversation. Rules:
-- Ask ONE short, friendly question per turn. Do not ask multiple questions at once.
-- The questions you should eventually get answers to (in any order): WHERE (region/park), HOW HARD (difficulty), HOW LONG (miles or days), WHAT KIND (features like lakes, views, forests), WHAT SHAPE (loop, out-and-back, point-to-point).
-- Every time the user reveals a preference, IMMEDIATELY call set_preferences with that info. Do not wait.
-- After calling set_preferences, ask the next question naturally in your response.
-- NEVER call search_trails, get_weather, get_permit_info, or get_trail_photo during this phase.
-- You do NOT need all 5 preferences before moving to Phase 2. Use your judgment — if the user has given 3+ preferences and seems ready, proceed when they confirm.
+Your first job is to learn what the user wants. Each time the user mentions a preference, call set_preferences immediately to record it.
 
-## PHASE 2 — RECOMMENDING (only when user is ready)
+Preferences to collect:
+1. Where (region/park) — e.g. "Yosemite", "Sierra Nevada", "Big Sur"
+2. Difficulty — easy / moderate / hard / very hard
+3. Length (miles) — how long a trip they want
+4. Features — views, lake, waterfall, forest, river, wildlife, wildflowers
+5. Route type — loop / out-and-back / point-to-point
 
-Move to Phase 2 ONLY when:
-- The user explicitly says they're ready (e.g. "find me a trail", "let's go", "yes", "sounds good", "book it", "show me trails"), OR
-- The user has given enough preferences and you ask "Ready for me to find your trail?" and they confirm.
+PHASE 1 RULES:
+- Call set_preferences every time you learn something new. Partial updates are fine.
+- After calling set_preferences, ask a natural follow-up question for the next missing preference.
+- Do NOT call search_trails until the user explicitly says they are ready (e.g. "find me a trail", "let's go", "show me options") OR until you have at least 3 preferences collected AND the user seems ready.
+- Never list trails or make recommendations in Phase 1.
+- Be warm, conversational, and brief.
 
-In Phase 2, call tools in this exact order:
-1. search_trails — use all gathered preferences as filters
-2. get_weather — use lat/lng from the best trail result
-3. get_permit_info — use the area name
-4. get_trail_photo — use trail name, lat, lng, and area name
+## PHASE 2 — RECOMMEND A TRAIL
 
-CRITICAL — TRAIL NAME: Copy the trail name EXACTLY from search_trails output. Never invent a trail name.
+Triggered when user says they're ready, or you have ≥3 preferences and context suggests they want results.
 
-CRITICAL — PHOTO: If get_trail_photo returns "PHOTO_URL: https://...", paste that ENTIRE line verbatim as the very first line of your response. Do NOT rewrite it.
+PHASE 2 RULES (execute in this exact order):
+1. Call search_trails with all collected preferences.
+2. From the results, pick the BEST single trail. Call get_weather with its lat/lng.
+3. Call get_permit_info with the trail's area name.
+4. Call get_trail_photo with the trail's lat, lng, trail_name, and area_name. Include the returned PHOTO_URL line VERBATIM at the very start of your response — copy it exactly, do not paraphrase or omit it.
+5. Give your final recommendation: trail name (EXACTLY as returned by search_trails), why it fits, weather outlook, and permit details.
 
-Then write your recommendation: trail name (exactly from results), why it fits, weather outlook, permit details.
-
-## GENERAL RULES
-- NEVER call search_trails until the user is ready (Phase 2).
-- NEVER list multiple trails. Commit to ONE.
-- Keep responses short and conversational.
-- If the user's very first message is casual chitchat with zero trail info (e.g. "hi", "hello", "let's find a trail"), greet them warmly and ask where in California they're thinking of going.
+CRITICAL:
+- NEVER invent trail names, distances, elevation, or weather data. Use ONLY values returned by tools.
+- NEVER write tool calls as text — actually invoke the tool.
+- Commit to ONE trail. No lists, no options.
 """
 
 
-def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
+def run(user_message: str, history: list[dict], accumulated_prefs: dict | None = None) -> tuple[str, list[dict], dict]:
     """
     Run one turn of the agent loop.
 
-    Returns the final assistant text response and the updated history.
+    Returns (response_text, updated_history, accumulated_preferences).
+    accumulated_prefs carries preference state across turns.
     """
     client = OpenAI(base_url=OLLAMA_BASE, api_key="ollama")
+    prefs = dict(accumulated_prefs or {})
 
     history = history + [{"role": "user", "content": user_message}]
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
 
     max_iterations = 10
-    tools_called = False
     for _ in range(max_iterations):
         response = client.chat.completions.create(
             model=MODEL,
@@ -84,14 +85,9 @@ def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
 
         msg = response.choices[0].message
 
-        # No tool calls — check whether the model narrated a tool call as prose
-        # (a known Mistral behaviour) instead of actually invoking it.  If so,
-        # add a stern reminder and retry rather than surfacing the raw narration.
         if not msg.tool_calls:
             content = msg.content or ""
             if _NARRATED_TOOL_CALL_PATTERNS.search(content):
-                # Append the bad response so the model sees it, then inject a
-                # correction that tells it to call the tool for real this time.
                 messages.append({"role": "assistant", "content": content})
                 messages.append({
                     "role": "user",
@@ -100,14 +96,12 @@ def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
                         "Do NOT write tool calls as text. Invoke the tool directly now."
                     ),
                 })
-                continue  # retry the loop
+                continue
 
-            # Genuine final answer
             history.append({"role": "assistant", "content": content})
-            return content, history
+            return content, history, prefs
 
         # Execute each tool call
-        tools_called = True
         messages.append(msg)
         for tc in msg.tool_calls:
             fn_name = tc.function.name
@@ -119,12 +113,19 @@ def run(user_message: str, history: list[dict]) -> tuple[str, list[dict]]:
             else:
                 result = f"Unknown tool: {fn_name}"
 
+            # Capture set_preferences results immediately
+            if result.startswith("PREFS_UPDATED:"):
+                try:
+                    partial = json.loads(result[len("PREFS_UPDATED:"):].strip())
+                    prefs.update(partial)
+                except Exception:
+                    pass
+
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "content": result,
             })
 
-    # Safety: if we hit max iterations, force a final answer
     history.append({"role": "assistant", "content": "I gathered the information but couldn't finalize. Please try rephrasing your request."})
-    return history[-1]["content"], history
+    return history[-1]["content"], history, prefs

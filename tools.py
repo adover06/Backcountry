@@ -79,10 +79,20 @@ def search_trails(
 
     if region:
         region_lower = region.lower()
-        trails = [
-            t for t in trails
-            if region_lower in t["area"].lower() or region_lower in t["city"].lower()
-        ]
+        region_nospace = region_lower.replace(" ", "")
+
+        def _matches(t):
+            area = t["area"].lower()
+            city = t["city"].lower()
+            # Exact substring
+            if region_lower in area or region_lower in city:
+                return True
+            # Space-normalized (eldorado == el dorado)
+            if region_nospace in area.replace(" ", "") or region_nospace in city.replace(" ", ""):
+                return True
+            return False
+
+        trails = [t for t in trails if _matches(t)]
 
     if difficulty:
         trails = [t for t in trails if t["difficulty"] == difficulty.lower()]

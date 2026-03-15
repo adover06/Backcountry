@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>California Backpacking Trail Advisor</title>
+<title>Backcountry — California Trail Advisor</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap" rel="stylesheet">
@@ -760,6 +760,96 @@ body {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   PREFERENCE PANEL — Mountain + checklist
+   ═══════════════════════════════════════════════════════════════ */
+#prefPanel { display: flex; flex-direction: column; height: 100%; }
+
+.mountain-viz {
+  padding: 14px 14px 0;
+  flex-shrink: 0;
+}
+.mountain-svg { width: 100%; height: auto; display: block; }
+
+.pref-checklist {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.pref-checklist-title {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ridge);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.pref-items {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+.pref-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--cream-dark);
+  border: 1px solid transparent;
+  transition: background 0.35s ease, border-color 0.35s ease;
+}
+.pref-item.filled {
+  background: rgba(45,74,62,0.06);
+  border-color: rgba(45,74,62,0.11);
+}
+.pref-check {
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(45,74,62,0.22);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.3s, border-color 0.3s;
+  color: transparent;
+}
+.pref-item.filled .pref-check {
+  background: var(--forest); border-color: var(--forest); color: var(--cream);
+}
+.pref-check svg { width: 9px; height: 9px; }
+.pref-info { display: flex; flex: 1; align-items: baseline; gap: 6px; min-width: 0; }
+.pref-label {
+  font-size: 0.68rem; color: var(--ridge);
+  text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0;
+}
+.pref-value {
+  font-size: 0.78rem; color: var(--charcoal); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pref-item:not(.filled) .pref-value { color: rgba(0,0,0,0.22); }
+
+.find-trail-btn {
+  width: 100%; padding: 11px 16px;
+  background: var(--forest); color: var(--cream); border: none;
+  border-radius: var(--radius-md);
+  font-family: var(--font-display); font-size: 0.95rem; font-weight: 500;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  gap: 8px; transition: all 0.2s; letter-spacing: -0.01em;
+  margin-top: auto;
+}
+.find-trail-btn:hover:not(:disabled) {
+  background: var(--forest-light); transform: translateY(-1px); box-shadow: var(--shadow-md);
+}
+.find-trail-btn:hover:not(:disabled) svg { transform: translateX(3px); }
+.find-trail-btn:disabled { opacity: 0.32; cursor: not-allowed; }
+.find-trail-btn svg { width: 16px; height: 16px; transition: transform 0.2s; }
+.find-trail-btn.ready { animation: trailPulse 2.2s ease-in-out infinite; }
+@keyframes trailPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(45,74,62,0.35); }
+  50%       { box-shadow: 0 0 0 7px rgba(45,74,62,0); }
+}
 </style>
 </head>
 <body>
@@ -777,8 +867,8 @@ body {
         <path d="M11 22l2-4 3 2 2-3 3 5H11z" fill="#1B3129" opacity="0.3"/>
       </svg>
       <div>
-        <h1>California Trail Advisor</h1>
-        <div class="header-subtitle">1,194 backpacking trails · Weather · AQI · Permits</div>
+        <h1>Backcountry</h1>
+        <div class="header-subtitle">California Trail Advisor · Weather · Permits</div>
       </div>
     </div>
     <button class="new-chat-btn" onclick="resetChat()">+ New Chat</button>
@@ -827,16 +917,90 @@ body {
         <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
         <circle cx="12" cy="10" r="3"/>
       </svg>
-      <h3>Trail Explorer</h3>
+      <h3>Trip Planner</h3>
       <span class="trail-count" id="trailCount">—</span>
     </div>
     <div class="sidebar-content" id="sidebarContent">
-      <div class="sidebar-empty" id="sidebarEmpty">
-        <svg viewBox="0 0 48 48" fill="none" stroke="var(--ridge)" stroke-width="1.5">
-          <path d="M8 40L20 12l8 16 12-20"/>
-          <circle cx="20" cy="12" r="2"/>
-        </svg>
-        <p>Ask about trails and they'll appear here with details, weather, and conditions.</p>
+      <!-- ═══ PREFERENCE PANEL ═══ -->
+      <div id="prefPanel">
+        <div class="mountain-viz">
+          <svg id="mountain-svg" class="mountain-svg" viewBox="0 0 380 158" xmlns="http://www.w3.org/2000/svg">
+            <!-- Faint topo ellipses at base -->
+            <ellipse cx="190" cy="150" rx="168" ry="11" fill="none" stroke="rgba(45,74,62,0.055)" stroke-width="0.8"/>
+            <ellipse cx="190" cy="150" rx="128" ry="8"  fill="none" stroke="rgba(45,74,62,0.055)" stroke-width="0.8"/>
+            <ellipse cx="190" cy="150" rx="88"  rx="88" ry="5"  fill="none" stroke="rgba(45,74,62,0.055)" stroke-width="0.8"/>
+            <!-- Mountain fill -->
+            <path d="M 8,152 L 190,14 L 372,152 Z" fill="rgba(45,74,62,0.04)"/>
+            <!-- Trees — left -->
+            <polygon points="16,151 23,134 30,151" fill="rgba(45,74,62,0.28)"/>
+            <polygon points="30,151 39,132 48,151" fill="rgba(45,74,62,0.38)"/>
+            <polygon points="46,151 55,136 64,151" fill="rgba(45,74,62,0.22)"/>
+            <!-- Trees — right -->
+            <polygon points="316,151 325,132 334,151" fill="rgba(45,74,62,0.22)"/>
+            <polygon points="332,151 341,134 350,151" fill="rgba(45,74,62,0.38)"/>
+            <polygon points="350,151 357,136 364,151" fill="rgba(45,74,62,0.28)"/>
+            <!-- Snow cap -->
+            <polygon points="190,14 206,44 174,44" fill="rgba(232,224,208,0.85)" stroke="rgba(45,74,62,0.12)" stroke-width="0.6"/>
+            <!-- Mountain ridge -->
+            <path d="M 8,152 L 190,14 L 372,152" fill="none" stroke="var(--forest)" stroke-width="1.6" stroke-linejoin="round"/>
+            <!-- Trail path (full dashed — background) -->
+            <path id="trail-path-bg"
+                  d="M 26,150 C 82,150 132,50 190,28 C 248,50 298,150 354,150"
+                  fill="none" stroke="rgba(196,149,106,0.35)" stroke-width="1.5"
+                  stroke-dasharray="4 3" stroke-linecap="round"/>
+            <!-- Trail path (done — solid, grows left→right) -->
+            <path id="trail-path-done"
+                  d="M 26,150 C 82,150 132,50 190,28 C 248,50 298,150 354,150"
+                  fill="none" stroke="var(--terracotta)" stroke-width="2"
+                  stroke-linecap="round" stroke-dasharray="10000" stroke-dashoffset="10000"/>
+            <!-- Destination flag -->
+            <line x1="354" y1="150" x2="354" y2="132" stroke="var(--sandstone)" stroke-width="1.5"/>
+            <polygon points="354,132 367,137 354,142" fill="var(--sandstone)"/>
+            <!-- Hiker -->
+            <g id="hiker-group" transform="translate(26,150)">
+              <ellipse cx="0" cy="4" rx="5" ry="2" fill="rgba(0,0,0,0.08)"/>
+              <rect x="2" y="-20" width="5" height="7" rx="1.5" fill="var(--sandstone)"/>
+              <circle cx="-1" cy="-16" r="3.5" fill="var(--forest-deep)"/>
+              <line x1="-4" y1="-19" x2="2.5" y2="-19" stroke="var(--forest-deep)" stroke-width="1.2" stroke-linecap="round"/>
+              <line x1="-1" y1="-19" x2="-1" y2="-23" stroke="var(--forest-deep)" stroke-width="1.2" stroke-linecap="round"/>
+              <line x1="-1" y1="-12" x2="-1" y2="-4" stroke="var(--forest-deep)" stroke-width="1.8" stroke-linecap="round"/>
+              <line x1="-1" y1="-10" x2="-5" y2="-6" stroke="var(--forest-deep)" stroke-width="1.2" stroke-linecap="round"/>
+              <line x1="-5"  y1="-6" x2="-7" y2="3"  stroke="var(--ridge)" stroke-width="1" stroke-linecap="round"/>
+              <line x1="-1" y1="-10" x2="3" y2="-6"  stroke="var(--forest-deep)" stroke-width="1.2" stroke-linecap="round"/>
+              <line x1="-1" y1="-4"  x2="-4" y2="3"  stroke="var(--forest-deep)" stroke-width="1.5" stroke-linecap="round"/>
+              <line x1="-1" y1="-4"  x2="2"  y2="3"  stroke="var(--forest-deep)" stroke-width="1.5" stroke-linecap="round"/>
+            </g>
+          </svg>
+        </div>
+        <div class="pref-checklist">
+          <div class="pref-checklist-title">Trip Preferences</div>
+          <div class="pref-items">
+            <div class="pref-item" id="pref-region">
+              <div class="pref-check"><svg viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              <div class="pref-info"><span class="pref-label">Where</span><span class="pref-value" id="pref-region-val">—</span></div>
+            </div>
+            <div class="pref-item" id="pref-difficulty">
+              <div class="pref-check"><svg viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              <div class="pref-info"><span class="pref-label">Difficulty</span><span class="pref-value" id="pref-difficulty-val">—</span></div>
+            </div>
+            <div class="pref-item" id="pref-distance">
+              <div class="pref-check"><svg viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              <div class="pref-info"><span class="pref-label">Length</span><span class="pref-value" id="pref-distance-val">—</span></div>
+            </div>
+            <div class="pref-item" id="pref-features">
+              <div class="pref-check"><svg viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              <div class="pref-info"><span class="pref-label">Features</span><span class="pref-value" id="pref-features-val">—</span></div>
+            </div>
+            <div class="pref-item" id="pref-route">
+              <div class="pref-check"><svg viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              <div class="pref-info"><span class="pref-label">Route</span><span class="pref-value" id="pref-route-val">—</span></div>
+            </div>
+          </div>
+          <button class="find-trail-btn" id="findTrailBtn" onclick="requestTrailSearch()" disabled>
+            Find My Trail
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="10" x2="16" y2="10"/><polyline points="11,5 16,10 11,15"/></svg>
+          </button>
+        </div>
       </div>
       <div id="sidebarTrails"></div>
       <div id="trailDetail" style="display:none"></div>
@@ -852,6 +1016,7 @@ const sessionId = 'session_' + Math.random().toString(36).slice(2, 10);
 let isLoading = false;
 let allTrails = [];
 let mentionedTrails = [];
+let currentPrefs = {};
 
 /* ═══════════════════════════════════════════════════════════════
    INIT
@@ -927,6 +1092,7 @@ async function sendMessage() {
       appendMessage('assistant', `⚠ ${data.error}\n\nMake sure Ollama is running: \`ollama serve\``);
     } else {
       appendMessage('assistant', data.response, data.photo_url || null);
+      if (data.preferences) updatePreferences(data.preferences);
       extractTrailMentions(data.response);
     }
   } catch (err) {
@@ -1015,8 +1181,10 @@ async function resetChat() {
   // Clear sidebar
   document.getElementById('sidebarTrails').innerHTML = '';
   document.getElementById('trailDetail').style.display = 'none';
-  document.getElementById('sidebarEmpty').style.display = '';
+  document.getElementById('prefPanel').style.display = '';
   mentionedTrails = [];
+  currentPrefs = {};
+  updatePreferences({});
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1034,7 +1202,7 @@ function extractTrailMentions(text) {
   }
 
   if (found.length > 0) {
-    document.getElementById('sidebarEmpty').style.display = 'none';
+    document.getElementById('prefPanel').style.display = 'none';
     const container = document.getElementById('sidebarTrails');
     for (const trail of found) {
       container.insertAdjacentHTML('afterbegin', renderTrailCard(trail));
@@ -1211,6 +1379,106 @@ function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   PREFERENCE PANEL — hiker progress + checklist
+   ═══════════════════════════════════════════════════════════════ */
+let _hikerPathLen = 0;
+
+function _initHiker() {
+  const p = document.getElementById('trail-path-bg');
+  if (!p) return;
+  _hikerPathLen = p.getTotalLength();
+  // initialise done-path with dasharray matching real length
+  const done = document.getElementById('trail-path-done');
+  if (done) {
+    done.style.strokeDasharray = _hikerPathLen;
+    done.style.strokeDashoffset = _hikerPathLen;
+  }
+  _moveHiker(0);
+}
+
+function _moveHiker(progress) {
+  const bgPath = document.getElementById('trail-path-bg');
+  const donePath = document.getElementById('trail-path-done');
+  const hikerGroup = document.getElementById('hiker-group');
+  if (!bgPath || !hikerGroup) return;
+
+  const total = _hikerPathLen || bgPath.getTotalLength();
+  const len = Math.min(progress, 1) * total;
+
+  // Advance the solid "done" stroke
+  if (donePath) donePath.style.strokeDashoffset = total - len;
+
+  // Position hiker
+  const pt = bgPath.getPointAtLength(len);
+  const pt1 = bgPath.getPointAtLength(Math.max(0, len - 3));
+  const pt2 = bgPath.getPointAtLength(Math.min(total, len + 3));
+  const angle = Math.atan2(pt2.y - pt1.y, pt2.x - pt1.x) * 180 / Math.PI;
+
+  hikerGroup.style.transition = 'transform 0.9s cubic-bezier(0.4,0,0.2,1)';
+  hikerGroup.setAttribute('transform', `translate(${pt.x},${pt.y}) rotate(${angle})`);
+}
+
+function _setPrefItem(itemId, valId, hasValue, display) {
+  const item = document.getElementById(itemId);
+  const val  = document.getElementById(valId);
+  if (!item || !val) return;
+  item.classList.toggle('filled', !!hasValue);
+  val.textContent = display || '—';
+}
+
+function countFilledPrefs(p) {
+  let n = 0;
+  if (p.region) n++;
+  if (p.difficulty) n++;
+  if (p.min_miles || p.max_miles || p.trip_days) n++;
+  if (p.features && p.features.length) n++;
+  if (p.route_type) n++;
+  return n;
+}
+
+function updatePreferences(prefs) {
+  if (!prefs) return;
+  // merge (later calls win per-field)
+  Object.keys(prefs).forEach(k => { if (prefs[k] !== null && prefs[k] !== undefined) currentPrefs[k] = prefs[k]; });
+
+  const p = currentPrefs;
+  _setPrefItem('pref-region',    'pref-region-val',    p.region,     p.region);
+  _setPrefItem('pref-difficulty','pref-difficulty-val', p.difficulty,
+    p.difficulty ? p.difficulty.charAt(0).toUpperCase() + p.difficulty.slice(1) : null);
+
+  let distVal = null;
+  if (p.trip_days) distVal = `${p.trip_days} day${p.trip_days > 1 ? 's' : ''}`;
+  if (p.min_miles && p.max_miles) distVal = (distVal ? distVal + ' · ' : '') + `${p.min_miles}–${p.max_miles} mi`;
+  else if (p.min_miles)  distVal = (distVal ? distVal + ' · ' : '') + `${p.min_miles}+ mi`;
+  else if (p.max_miles)  distVal = (distVal ? distVal + ' · ' : '') + `up to ${p.max_miles} mi`;
+  _setPrefItem('pref-distance',  'pref-distance-val',  distVal,      distVal);
+
+  const featVal = p.features && p.features.length ? p.features.slice(0,3).join(', ') : null;
+  _setPrefItem('pref-features',  'pref-features-val',  featVal,      featVal);
+
+  const routeVal = p.route_type ? p.route_type.replace(/-/g, '\u2011') : null;
+  _setPrefItem('pref-route',     'pref-route-val',     p.route_type, routeVal);
+
+  const filled = countFilledPrefs(p);
+  _moveHiker(filled / 5);
+
+  const btn = document.getElementById('findTrailBtn');
+  if (btn) {
+    btn.disabled = filled < 2;
+    btn.classList.toggle('ready', filled >= 3);
+  }
+}
+
+function requestTrailSearch() {
+  const btn = document.getElementById('findTrailBtn');
+  if (btn) btn.disabled = true;
+  document.getElementById('userInput').value = "I'm ready — find me the best trail!";
+  sendMessage();
+}
+
+document.addEventListener('DOMContentLoaded', () => { _initHiker(); });
 
 /* ═══════════════════════════════════════════════════════════════
    TOPOGRAPHIC MAP BACKGROUND — marching squares on canvas
