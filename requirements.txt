@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-openai
-langchain-openai
-langgraph
-requests
-rich
