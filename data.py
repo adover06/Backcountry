@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-_SOURCE = Path(__file__).parent.parent / "lomein.json"
+_SOURCE = "/home/andrewdover/Documents/Backcountry/lomein.json"
 
 DIFFICULTY = {
     "1": "easy", "2": "easy",
