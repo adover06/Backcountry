@@ -10,17 +10,26 @@ This folder gives you a reliable, low-friction workflow for collecting AllTrails
 - `batch_tracker.csv`: manual progress tracker.
 - `merge_batches.py`: merges, dedupes, validates, and reports progress.
 - `extract_json_from_chat.py`: pulls the first valid JSON object from noisy chat text.
+- `generate_next_prompt.py`: auto-renders the next prompt from queue + template.
+- `finalize_batch.py`: marks queue row done and appends batch tracker entry.
 
 ## Recommended workflow
 
 1. Pick next row from `focus_queue_norcal_sacramento_first.csv`.
-2. Paste `master_prompt_batch20.txt` into ChatGPT (AllTrails integration enabled).
-3. Replace placeholders:
-   - `BATCH_ID`
-   - `FOCUS_AREA`
-   - `FOCUS_QUERY`
+2. Auto-generate the next prompt:
+
+```bash
+python3 alltrails_manual_collection/generate_next_prompt.py --mark-in-progress
+```
+
+3. Copy/paste `alltrails_manual_collection/generated_prompt.txt` into ChatGPT (AllTrails integration enabled).
 4. Save output JSON into `batches/batch_XXX.json`.
-5. Log row in `batch_tracker.csv`.
+5. Finalize batch (updates queue + tracker):
+
+```bash
+python3 alltrails_manual_collection/finalize_batch.py --batch-file batches/batch_XXX.json
+```
+
 6. Run merge script:
 
 ```bash
@@ -34,6 +43,12 @@ python3 alltrails_manual_collection/extract_json_from_chat.py --input raw_reply.
 ```
 
 7. Check outputs in `alltrails_manual_collection/outputs/`.
+
+Optional: print prompt directly to terminal instead of writing file:
+
+```bash
+python3 alltrails_manual_collection/generate_next_prompt.py --print-only
+```
 
 ## Output reliability recommendation
 
