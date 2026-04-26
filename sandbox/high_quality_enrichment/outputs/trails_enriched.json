@@ -1,0 +1,101 @@
+[
+  {
+    "trail_id": "t_mist",
+    "name": "Mist Trail",
+    "area": "Yosemite National Park",
+    "lat": 37.7328,
+    "lng": -119.5586,
+    "length_miles": 6.4,
+    "elev_gain_ft": 2185,
+    "difficulty": "hard",
+    "route_type": "out-and-back",
+    "features": [
+      "waterfall",
+      "views",
+      "river"
+    ],
+    "description": "The Mist Trail climbs alongside the Merced River to Vernal Fall and Nevada Fall, with steep granite steps and heavy spray in spring.",
+    "description_source": {
+      "type": "official",
+      "url": "https://www.nps.gov/yose/planyourvisit/misttrail.htm",
+      "license": "public-domain-us-gov",
+      "fetched_at": "2026-04-25T17:00:00Z",
+      "confidence": 1.0
+    },
+    "image": {
+      "url": "https://upload.wikimedia.org/example/vernal_fall_mist_trail.jpg",
+      "source": "wikimedia",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Vernal_Fall_from_Mist_Trail.jpg",
+      "license": "cc-by-sa-4.0",
+      "fetched_at": "2026-04-25T17:00:00Z",
+      "confidence": 0.95
+    },
+    "enriched_at": "2026-04-26T00:35:51.338985+00:00"
+  },
+  {
+    "trail_id": "t_alamere",
+    "name": "Alamere Falls Trail",
+    "area": "Point Reyes National Seashore",
+    "lat": 37.9988,
+    "lng": -122.8768,
+    "length_miles": 8.4,
+    "elev_gain_ft": 1601,
+    "difficulty": "moderate",
+    "route_type": "out-and-back",
+    "features": [
+      "waterfall",
+      "coastal",
+      "wildflowers"
+    ],
+    "description": "Alamere Falls is a coastal waterfall route in Point Reyes with rolling terrain, bluff views, and beach access near Wildcat Camp.",
+    "description_source": {
+      "type": "official",
+      "url": "https://www.nps.gov/pore/planyourvisit/alamere_falls.htm",
+      "license": "public-domain-us-gov",
+      "fetched_at": "2026-04-25T17:00:00Z",
+      "confidence": 1.0
+    },
+    "image": {
+      "url": "https://upload.wikimedia.org/example/alamere_falls.jpg",
+      "source": "wikimedia",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Alamere_Falls.jpg",
+      "license": "cc-by-3.0",
+      "fetched_at": "2026-04-25T17:00:00Z",
+      "confidence": 0.95
+    },
+    "enriched_at": "2026-04-26T00:35:51.339001+00:00"
+  },
+  {
+    "trail_id": "t_eagle_lake",
+    "name": "Eagle Lake Trail",
+    "area": "Desolation Wilderness",
+    "lat": 38.9558,
+    "lng": -120.1002,
+    "length_miles": 2.0,
+    "elev_gain_ft": 459,
+    "difficulty": "moderate",
+    "route_type": "out-and-back",
+    "features": [
+      "lake",
+      "views",
+      "forest"
+    ],
+    "description": "Eagle Lake Trail in Desolation Wilderness is a moderate out-and-back route of about 2.0 miles with 459 ft of climbing, featuring lake, views, forest.",
+    "description_source": {
+      "type": "generated",
+      "url": "",
+      "license": "internal",
+      "fetched_at": "2026-04-26T00:35:51.339024+00:00",
+      "confidence": 0.6
+    },
+    "image": {
+      "url": "https://www.fs.usda.gov/example/eagle_lake.jpg",
+      "source": "official",
+      "source_url": "https://www.fs.usda.gov/recarea/eldorado/recreation/hiking/recarea/?recid=12345",
+      "license": "public-domain-us-gov",
+      "fetched_at": "2026-04-25T17:00:00Z",
+      "confidence": 1.0
+    },
+    "enriched_at": "2026-04-26T00:35:51.339036+00:00"
+  }
+]

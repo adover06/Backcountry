@@ -1,0 +1,29 @@
+[
+  {
+    "trail_id": "t_mist",
+    "source_type": "wikimedia",
+    "source_url": "https://commons.wikimedia.org/wiki/File:Vernal_Fall_from_Mist_Trail.jpg",
+    "image_url": "https://upload.wikimedia.org/example/vernal_fall_mist_trail.jpg",
+    "license": "cc-by-sa-4.0",
+    "attribution": "Example Photographer",
+    "fetched_at": "2026-04-25T17:00:00Z"
+  },
+  {
+    "trail_id": "t_alamere",
+    "source_type": "wikimedia",
+    "source_url": "https://commons.wikimedia.org/wiki/File:Alamere_Falls.jpg",
+    "image_url": "https://upload.wikimedia.org/example/alamere_falls.jpg",
+    "license": "cc-by-3.0",
+    "attribution": "Example Photographer",
+    "fetched_at": "2026-04-25T17:00:00Z"
+  },
+  {
+    "trail_id": "t_eagle_lake",
+    "source_type": "official",
+    "source_url": "https://www.fs.usda.gov/recarea/eldorado/recreation/hiking/recarea/?recid=12345",
+    "image_url": "https://www.fs.usda.gov/example/eagle_lake.jpg",
+    "license": "public-domain-us-gov",
+    "attribution": "USFS",
+    "fetched_at": "2026-04-25T17:00:00Z"
+  }
+]
