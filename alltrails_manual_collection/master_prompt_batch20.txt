@@ -1,0 +1,68 @@
+You are collecting structured trail data for a California backpacking advisor app.
+
+HARD REQUIREMENTS
+- Use AllTrails integration data when available in this chat.
+- Backpacking-focused trails only.
+- Return EXACTLY one JSON object inside one fenced code block tagged json.
+- No extra commentary before or after the JSON block.
+- Exactly 20 unique trails if possible; otherwise return as many as available and explain shortfall in `batch_notes`.
+
+INPUTS
+- batch_id: BATCH_ID
+- focus_area: FOCUS_AREA
+- focus_query: FOCUS_QUERY
+
+OUTPUT SCHEMA
+{
+  "batch_id": "string",
+  "generated_at": "ISO-8601",
+  "source": "alltrails_chatgpt_integration",
+  "focus_area": "string",
+  "focus_query": "string",
+  "target_count": 20,
+  "returned_count": 0,
+  "batch_notes": "string",
+  "trails": [
+    {
+      "id": "string slug, unique",
+      "name": "string",
+      "area": "string",
+      "region": "string",
+      "city": "string or null",
+      "state": "CA",
+      "lat": "number or null",
+      "lng": "number or null",
+      "length_miles": "number or null",
+      "elev_gain_ft": "integer or null",
+      "difficulty": "easy|moderate|hard|very hard|null",
+      "route_type": "loop|out-and-back|point-to-point|null",
+      "avg_rating": "number or null",
+      "num_reviews": "integer or null",
+      "features": ["array of lowercase strings"],
+      "description": "1-3 sentence factual trail summary",
+      "weather_hint": "short text or null",
+      "permit_hint": "short text or null",
+      "alltrails_url": "https://... or null",
+      "photo_url": "https://... or null",
+      "data_confidence": "high|medium|low",
+      "missing_fields": ["array of field names that are null"]
+    }
+  ]
+}
+
+FILTERING RULES
+- Include only Northern California and backpacking-suitable trails.
+- Exclude urban walks and clearly non-backpacking routes.
+- Keep region labels geographically sensible (do not label Sacramento foothills as Tahoe Basin unless actually in that region).
+
+NORMALIZATION RULES
+- Convert distance to miles and elevation to feet.
+- If tool difficulty enum only supports easy/moderate/hard, map output to those; use very hard only when strongly justified.
+- Normalize route_type to loop, out-and-back, or point-to-point.
+- If a field is unknown, set it to null and include in missing_fields.
+
+DEDUP RULES (WITHIN THIS BATCH)
+- Ensure no duplicates by id.
+- Ensure no duplicates by alltrails_url.
+
+Return now.

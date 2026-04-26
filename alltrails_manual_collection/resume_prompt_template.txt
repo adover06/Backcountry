@@ -1,0 +1,24 @@
+Resume collection for Northern California backpacking trails.
+
+Context:
+- Last completed batch_id: LAST_BATCH_ID
+- Next batch_id: NEXT_BATCH_ID
+- Next focus_area: NEXT_FOCUS_AREA
+- Next focus_query: NEXT_FOCUS_QUERY
+
+Requirements:
+- Use the same schema and rules as the previous collection run.
+- Return exactly one fenced json code block only.
+- Target 20 unique trails for this batch.
+- Do not repeat ids or alltrails_url from previous batches if possible.
+
+Output JSON fields required at top level:
+- batch_id
+- generated_at
+- source
+- focus_area
+- focus_query
+- target_count
+- returned_count
+- batch_notes
+- trails

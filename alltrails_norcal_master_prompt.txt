@@ -37,6 +37,18 @@ TASK
 Generate up to 100 trails total (or as many as confidently available), focused on backpacking-appropriate routes.
 Prefer well-known and high-signal trails first.
 
+AUTONOMOUS BATCH COLLECTION MODE (NO MANUAL "NEXT 20")
+- Work in internal batches of 20 results from the integration until you reach 100 unique trails or cannot find enough new trails.
+- Do NOT ask me for confirmation between batches.
+- Deduplicate across batches using both `alltrails_url` and `id`.
+- Stop early if two consecutive internal batches each add fewer than 3 new trails.
+- If you cannot continue, still return a valid final JSON with whatever unique trails were collected.
+
+OUTPUT CONTRACT
+- Return exactly one final JSON object only.
+- No markdown, no comments, no placeholders, no explanatory text.
+- Do not output partial examples; output the complete final object only.
+
 JSON SCHEMA
 {
   "generated_at": "ISO-8601 string",
