@@ -1,0 +1,36 @@
+- Auburn State Recreation Area
+- South Fork American River / Cronan Ranch
+- Folsom Lake State Recreation Area
+- Desolation Wilderness
+- Granite Chief Wilderness
+- Tahoe National Forest (CA sections)
+- Lake Tahoe Basin (CA side)
+- Emigrant Wilderness
+- Mokelumne Wilderness
+- Carson-Iceberg Wilderness
+- Hoover Wilderness
+- Yosemite National Park
+- Stanislaus National Forest (backpacking zones)
+- Eldorado National Forest (backpacking zones)
+- Lassen Volcanic National Park
+- Lassen National Forest
+- Mount Shasta area / Shasta-Trinity National Forest
+- Trinity Alps Wilderness
+- Marble Mountains Wilderness
+- Russian Wilderness
+- Siskiyou Wilderness
+- Castle Crags State Park
+- Klamath National Forest (backpacking zones)
+- Redwood National and State Parks
+- Prairie Creek Redwoods State Park
+- Del Norte Coast Redwoods State Park
+- Jedediah Smith Redwoods State Park
+- Mendocino National Forest
+- Yolla Bolly-Middle Eel Wilderness
+- Point Reyes National Seashore
+- Marin Headlands / Mount Tamalpais
+- Sonoma Coast State Park / Salt Point
+- Ventana Wilderness (Big Sur)
+- Los Padres National Forest (Big Sur/backpacking sections)
+- Henry W. Coe State Park
+- Pinnacles National Park

@@ -9,6 +9,7 @@ This folder gives you a reliable, low-friction workflow for collecting AllTrails
 - `focus_queue_norcal_sacramento_first.csv`: Sacramento-first region order.
 - `batch_tracker.csv`: manual progress tracker.
 - `merge_batches.py`: merges, dedupes, validates, and reports progress.
+- `extract_json_from_chat.py`: pulls the first valid JSON object from noisy chat text.
 
 ## Recommended workflow
 
@@ -24,6 +25,12 @@ This folder gives you a reliable, low-friction workflow for collecting AllTrails
 
 ```bash
 python3 alltrails_manual_collection/merge_batches.py
+```
+
+If ChatGPT includes extra narration/tool text, save the whole reply to a raw text file and extract JSON:
+
+```bash
+python3 alltrails_manual_collection/extract_json_from_chat.py --input raw_reply.txt --output alltrails_manual_collection/batches/batch_001.json
 ```
 
 7. Check outputs in `alltrails_manual_collection/outputs/`.
