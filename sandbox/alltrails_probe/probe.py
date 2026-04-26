@@ -11,15 +11,19 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import random
 import re
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, urlparse
+from urllib.robotparser import RobotFileParser
 
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 USER_AGENT = (
@@ -27,6 +31,41 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
+
+
+def make_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1.0,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET", "HEAD"),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+def sleep_with_jitter(base_seconds: float) -> None:
+    if base_seconds <= 0:
+        return
+    floor = max(0.0, base_seconds * 0.6)
+    ceil = base_seconds * 1.4
+    time.sleep(random.uniform(floor, ceil))
+
+
+def robots_allows(url: str, user_agent: str = "*") -> bool:
+    parsed = urlparse(url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    rp = RobotFileParser()
+    rp.set_url(robots_url)
+    try:
+        rp.read()
+        return rp.can_fetch(user_agent, url)
+    except Exception:
+        return True
 
 
 @dataclass
@@ -47,6 +86,9 @@ class ProbeResult:
     image_path: str
     method: str
     status: str
+    http_status: int
+    blocked_by_robots: bool
+    page_title: str
     error: str
 
 
@@ -82,11 +124,11 @@ def looks_like_trail_page(url: str) -> bool:
     return domain_is_alltrails(url) and "/trail/" in p.path
 
 
-def discover_alltrails_url(name: str, region: str, timeout: int = 12) -> str:
+def discover_alltrails_url(session: requests.Session, name: str, region: str, timeout: int = 12) -> str:
     query = f"site:alltrails.com trail {name} {region}".strip()
     search_url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
     headers = {"User-Agent": USER_AGENT}
-    r = requests.get(search_url, headers=headers, timeout=timeout)
+    r = session.get(search_url, headers=headers, timeout=timeout)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -173,9 +215,9 @@ def extract_from_meta(html: str) -> tuple[str, str]:
     return desc, img
 
 
-def fetch_static(url: str, timeout: int = 15) -> tuple[str, str, str]:
+def fetch_static(session: requests.Session, url: str, timeout: int = 15) -> tuple[str, int, str, str]:
     headers = {"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"}
-    r = requests.get(url, headers=headers, timeout=timeout)
+    r = session.get(url, headers=headers, timeout=timeout)
     r.raise_for_status()
     html = r.text
 
@@ -184,46 +226,104 @@ def fetch_static(url: str, timeout: int = 15) -> tuple[str, str, str]:
 
     description = d1 or d2
     image_url = i1 or i2
-    return str(r.url), description, image_url
+    return str(r.url), r.status_code, description, image_url
 
 
-def fetch_playwright(url: str, timeout_ms: int = 20000) -> tuple[str, str, str]:
+def fetch_playwright(
+    url: str,
+    timeout_ms: int = 20000,
+    headless: bool = True,
+    locale: str = "en-US",
+    timezone_id: str = "America/Los_Angeles",
+    interactive: bool = False,
+    debug_dir: Path | None = None,
+    artifact_prefix: str = "trail",
+    profile_dir: Path | None = None,
+) -> tuple[str, int, str, str, str]:
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(user_agent=USER_AGENT)
-        page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-        page.wait_for_timeout(1500)
+        if profile_dir is not None:
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=headless,
+                user_agent=USER_AGENT,
+                locale=locale,
+                timezone_id=timezone_id,
+                viewport={"width": 1366, "height": 900},
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            browser = None
+        else:
+            browser = p.chromium.launch(headless=headless)
+            context = browser.new_context(
+                user_agent=USER_AGENT,
+                locale=locale,
+                timezone_id=timezone_id,
+                viewport={"width": 1366, "height": 900},
+            )
+            page = context.new_page()
+        response = page.goto(url, wait_until="load", timeout=timeout_ms)
+        page.wait_for_timeout(2000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        if interactive:
+            print("  Playwright interactive mode: browser is open.")
+            print("  Complete any manual steps in browser, then press Enter here to continue...")
+            input()
+        status = response.status if response else 0
         final_url = page.url
+        title = page.title()
         html = page.content()
-        browser.close()
+        if debug_dir is not None:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            stem = sanitize_filename(artifact_prefix)
+            (debug_dir / f"{stem}.html").write_text(html, encoding="utf-8")
+            try:
+                page.screenshot(path=str(debug_dir / f"{stem}.png"), full_page=True)
+            except Exception:
+                pass
+        context.close()
+        if browser is not None:
+            browser.close()
 
     d1, i1 = extract_from_ld_json(html)
     d2, i2 = extract_from_meta(html)
     description = d1 or d2
     image_url = i1 or i2
-    return final_url, description, image_url
+    return final_url, status, description, image_url, title
 
 
-def download_image(image_url: str, out_path: Path) -> str:
+def download_image(session: requests.Session, image_url: str, out_path: Path) -> str:
     if not image_url:
         return ""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     headers = {"User-Agent": USER_AGENT}
-    r = requests.get(image_url, headers=headers, timeout=20)
+    r = session.get(image_url, headers=headers, timeout=20)
     r.raise_for_status()
     out_path.write_bytes(r.content)
     return str(out_path)
 
 
 def probe_one(
+    session: requests.Session,
     trail: TrailInput,
     discover_url: bool,
     use_playwright: bool,
     download_images: bool,
     images_dir: Path,
     delay_seconds: float,
+    respect_robots: bool,
+    use_headed_browser: bool,
+    locale: str,
+    timezone_id: str,
+    playwright_only: bool,
+    interactive: bool,
+    debug_dir: Path | None,
+    profile_dir: Path | None,
 ) -> ProbeResult:
     result = ProbeResult(
         name=trail.name,
@@ -235,13 +335,16 @@ def probe_one(
         image_path="",
         method="",
         status="",
+        http_status=0,
+        blocked_by_robots=False,
+        page_title="",
         error="",
     )
 
     try:
         url = trail.alltrails_url.strip()
         if not url and discover_url:
-            url = discover_alltrails_url(trail.name, trail.region)
+            url = discover_alltrails_url(session, trail.name, trail.region)
         if not url:
             result.status = "no_url"
             result.error = "No AllTrails URL provided or discovered"
@@ -252,33 +355,59 @@ def probe_one(
             result.resolved_url = url
             return result
 
-        static_error = ""
-        try:
-            final_url, desc, img = fetch_static(url)
-            result.method = "static"
-            result.resolved_url = final_url
-            result.description = desc
-            result.image_url = img
-        except Exception as e:
-            static_error = str(e)
+        if respect_robots and not robots_allows(url, user_agent="*"):
+            result.status = "blocked_robots"
+            result.blocked_by_robots = True
+            result.resolved_url = url
+            result.error = "Skipped due to robots.txt policy"
+            return result
 
-        if use_playwright and (not result.description or not result.image_url):
-            final_url_pw, desc_pw, img_pw = fetch_playwright(url)
-            if desc_pw or img_pw:
-                result.method = "playwright"
+        static_error = ""
+        if not playwright_only:
+            try:
+                final_url, http_status, desc, img = fetch_static(session, url)
+                result.method = "static"
+                result.resolved_url = final_url
+                result.http_status = http_status
+                result.description = desc
+                result.image_url = img
+            except Exception as e:
+                static_error = str(e)
+
+        pw_error = ""
+        should_try_playwright = use_playwright and (playwright_only or not result.description or not result.image_url)
+        if should_try_playwright:
+            result.method = "playwright"
+            try:
+                final_url_pw, http_status_pw, desc_pw, img_pw, title_pw = fetch_playwright(
+                    url,
+                    headless=not use_headed_browser,
+                    locale=locale,
+                    timezone_id=timezone_id,
+                interactive=interactive,
+                debug_dir=debug_dir,
+                artifact_prefix=f"{trail.name}_{trail.region}",
+                profile_dir=profile_dir,
+            )
                 result.resolved_url = final_url_pw
+                result.http_status = http_status_pw or result.http_status
+                result.page_title = title_pw
                 result.description = desc_pw or result.description
                 result.image_url = img_pw or result.image_url
+            except Exception as e:
+                pw_error = str(e)
 
         if static_error and not result.description and not result.image_url:
             result.error = static_error
+        if pw_error and not result.description and not result.image_url:
+            result.error = pw_error
 
         if download_images and result.image_url:
             suffix = Path(urlparse(result.image_url).path).suffix.lower()
             if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
                 suffix = ".jpg"
             fname = sanitize_filename(f"{trail.name}_{trail.region}") + suffix
-            result.image_path = download_image(result.image_url, images_dir / fname)
+            result.image_path = download_image(session, result.image_url, images_dir / fname)
 
         if result.description or result.image_url:
             result.status = "ok"
@@ -287,8 +416,7 @@ def probe_one(
             if not result.error:
                 result.error = "Fetched page but found no description/image"
 
-        if delay_seconds > 0:
-            time.sleep(delay_seconds)
+        sleep_with_jitter(delay_seconds)
 
         return result
     except Exception as e:
@@ -320,6 +448,9 @@ def write_outputs(results: list[ProbeResult], out_dir: Path) -> None:
                 "image_path",
                 "method",
                 "status",
+                "http_status",
+                "blocked_by_robots",
+                "page_title",
                 "error",
             ],
         )
@@ -334,27 +465,54 @@ def main() -> None:
     parser.add_argument("--out-dir", default="outputs", help="Output folder")
     parser.add_argument("--discover-url", action="store_true", help="Try to find AllTrails URL via DuckDuckGo")
     parser.add_argument("--use-playwright", action="store_true", help="Use Playwright fallback if static parse is empty")
+    parser.add_argument("--playwright-only", action="store_true", help="Skip static requests and use Playwright only")
+    parser.add_argument("--headed", action="store_true", help="Run Playwright in headed browser mode")
+    parser.add_argument("--interactive", action="store_true", help="Pause in headed mode and wait for Enter before extraction")
     parser.add_argument("--download-images", action="store_true", help="Download first image locally")
-    parser.add_argument("--delay", type=float, default=1.5, help="Delay between trails in seconds")
+    parser.add_argument("--delay", type=float, default=2.5, help="Base delay between trails in seconds (jitter applied)")
+    parser.add_argument("--max-trails", type=int, default=20, help="Maximum number of trails to process")
+    parser.add_argument("--ignore-robots", action="store_true", help="Ignore robots.txt checks (not recommended)")
+    parser.add_argument("--locale", default="en-US", help="Browser locale for Playwright")
+    parser.add_argument("--timezone", default="America/Los_Angeles", help="Browser timezone for Playwright")
+    parser.add_argument("--debug-dir", default="", help="Write Playwright HTML/screenshot artifacts to this folder")
+    parser.add_argument("--profile-dir", default="", help="Persistent Playwright user profile directory")
     args = parser.parse_args()
 
     base = Path(__file__).resolve().parent
     input_path = (base / args.input).resolve() if not Path(args.input).is_absolute() else Path(args.input)
     out_dir = (base / args.out_dir).resolve() if not Path(args.out_dir).is_absolute() else Path(args.out_dir)
     images_dir = out_dir / "images"
+    debug_dir = None
+    if args.debug_dir:
+        debug_dir = (base / args.debug_dir).resolve() if not Path(args.debug_dir).is_absolute() else Path(args.debug_dir)
+    profile_dir = None
+    if args.profile_dir:
+        profile_dir = (base / args.profile_dir).resolve() if not Path(args.profile_dir).is_absolute() else Path(args.profile_dir)
 
+    session = make_session()
     trails = load_inputs(input_path)
+    if args.max_trails > 0:
+        trails = trails[: args.max_trails]
     results: list[ProbeResult] = []
 
     for idx, t in enumerate(trails, start=1):
         print(f"[{idx}/{len(trails)}] {t.name} ({t.region})")
         r = probe_one(
+            session=session,
             trail=t,
             discover_url=args.discover_url,
             use_playwright=args.use_playwright,
             download_images=args.download_images,
             images_dir=images_dir,
             delay_seconds=args.delay,
+            respect_robots=not args.ignore_robots,
+            use_headed_browser=args.headed,
+            locale=args.locale,
+            timezone_id=args.timezone,
+            playwright_only=args.playwright_only,
+            interactive=args.interactive,
+            debug_dir=debug_dir,
+            profile_dir=profile_dir,
         )
         print(f"  -> status={r.status}, method={r.method or '-'}")
         results.append(r)

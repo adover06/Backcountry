@@ -3,24 +3,15 @@
     "name": "Mist Trail",
     "region": "Yosemite",
     "alltrails_url": "https://www.alltrails.com/trail/us/california/mist-trail",
-    "resolved_url": "",
+    "resolved_url": "https://www.alltrails.com/trail/us/california/mist-trail",
     "description": "",
     "image_url": "",
     "image_path": "",
-    "method": "",
-    "status": "error",
-    "error": "403 Client Error: Forbidden for url: https://www.alltrails.com/trail/us/california/mist-trail"
-  },
-  {
-    "name": "Alamere Falls Trail",
-    "region": "Point Reyes",
-    "alltrails_url": "",
-    "resolved_url": "",
-    "description": "",
-    "image_url": "",
-    "image_path": "",
-    "method": "",
-    "status": "no_url",
-    "error": "No AllTrails URL provided or discovered"
+    "method": "playwright",
+    "status": "partial_empty",
+    "http_status": 403,
+    "blocked_by_robots": false,
+    "page_title": "alltrails.com",
+    "error": "Fetched page but found no description/image"
   }
 ]

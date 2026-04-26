@@ -1,3 +1,2 @@
-name,region,alltrails_url,resolved_url,description,image_url,image_path,method,status,error
-Mist Trail,Yosemite,https://www.alltrails.com/trail/us/california/mist-trail,,,,,,error,403 Client Error: Forbidden for url: https://www.alltrails.com/trail/us/california/mist-trail
-Alamere Falls Trail,Point Reyes,,,,,,,no_url,No AllTrails URL provided or discovered
+name,region,alltrails_url,resolved_url,description,image_url,image_path,method,status,http_status,blocked_by_robots,page_title,error
+Mist Trail,Yosemite,https://www.alltrails.com/trail/us/california/mist-trail,https://www.alltrails.com/trail/us/california/mist-trail,,,,playwright,partial_empty,403,False,alltrails.com,Fetched page but found no description/image
