@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 from typing import List
 
+from rapidfuzz import fuzz
 from data import get_trails
 
 
@@ -25,36 +26,44 @@ def match_trail(route: dict, name_hint: str = "") -> dict:
     midpoint = route.get("midpoint") if route else None
     hint = (name_hint or "").strip().lower()
     
-    # If no route/midpoint but have a name hint, search by name only
+    # If no route/midpoint but have a name hint, search by name with fuzzy matching
     if not midpoint and hint:
+        hint_words = hint.split()
         scored = []
         for t in trails:
-            name = t["name"].lower()
-            area = t.get("area", "").lower()
-            # Score based on name/area match
-            score = 0.0
+            name = (t.get("name") or "").lower()
+            area = (t.get("area") or "").lower()
+            city = (t.get("city") or "").lower()
+            
+            # Fuzzy match scores
+            name_score = fuzz.partial_ratio(hint, name)
+            area_score = fuzz.partial_ratio(hint, area) if area else 0
+            city_score = fuzz.partial_ratio(hint, city) if city else 0
+            token_score = fuzz.token_set_ratio(hint, name)
+            
+            # Combine scores with weights
+            score = max(name_score * 1.0, area_score * 0.5, city_score * 0.3, token_score * 0.8)
+            
+            # Boost exact substring matches
             if hint in name:
-                score += 10.0
-            elif hint in area:
-                score += 3.0
-            # Bonus for partial matches
-            hint_words = hint.split()
-            for word in hint_words:
-                if len(word) > 2 and word in name:
-                    score += 2.0
-            if score > 0:
+                score = min(100, score + 15)
+            
+            # Only include if reasonable match
+            if score >= 40:
                 scored.append((score, t))
         
         scored.sort(key=lambda x: -x[0])
-        shortlist = [s[1] for s in scored[:5]]
+        shortlist = [s[1] for s in scored[:10]]
         auto_selected = shortlist[0] if shortlist else None
         
         confidence = "low"
         if auto_selected:
-            matched_name = auto_selected["name"].lower()
-            if hint == matched_name or hint in matched_name:
+            matched_name = (auto_selected.get("name") or "").lower()
+            if hint == matched_name or matched_name.startswith(hint):
                 confidence = "high"
-            elif any(hint in w for w in matched_name.split()):
+            elif fuzz.partial_ratio(hint, matched_name) >= 85:
+                confidence = "high"
+            elif score >= 70:
                 confidence = "medium"
         
         return {
