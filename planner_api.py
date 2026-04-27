@@ -37,8 +37,7 @@ async def parse_route(file: UploadFile = File(...)):
 async def trail_match(payload: dict):
     route = payload.get("route") or {}
     name_hint = (payload.get("name_hint") or "").strip()
-    if not route.get("points"):
-        raise HTTPException(status_code=400, detail="Missing route points.")
+    # Allow name-only search without route points
     match = match_trail(route, name_hint=name_hint)
     return match
 
