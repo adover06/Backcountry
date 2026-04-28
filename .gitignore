@@ -205,5 +205,5 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-
+.DS_Store
 National_Forest_System_Trails_(Feature_Layer) (3).geojson
