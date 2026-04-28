@@ -58,6 +58,45 @@ async def check_weather(payload: dict):
     return weather
 
 
+@router.post("/api/checks/aqi")
+async def check_aqi(payload: dict):
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    if not lat or not lng:
+        raise HTTPException(status_code=400, detail="lat and lng required")
+    logger.info(f"AQI check for {lat}, {lng}")
+    aqi = get_aqi_summary(lat, lng)
+    logger.info(f"AQI result: {aqi}")
+    return aqi
+
+
+@router.post("/api/checks/fire")
+async def check_fire(payload: dict):
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    if not lat or not lng:
+        raise HTTPException(status_code=400, detail="lat and lng required")
+    logger.info(f"Fire check for {lat}, {lng}")
+    # Placeholder route for fire check (no spatial clipping yet)
+    fire = get_fire_summary({"midpoint": [lat, lng]})
+    logger.info(f"Fire result keys: {list(fire.keys())}")
+    return fire
+
+
+@router.post("/api/checks/snow")
+async def check_snow(payload: dict):
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    start_date = payload.get("start_date")
+    end_date = payload.get("end_date")
+    if not lat or not lng:
+        raise HTTPException(status_code=400, detail="lat and lng required")
+    logger.info(f"Snow check for {lat}, {lng}")
+    snow = get_snow_summary(lat, lng, start_date or "", end_date or "")
+    logger.info(f"Snow result: {snow}")
+    return snow
+
+
 @router.post("/api/plan")
 async def plan_trip(
     file: UploadFile = File(...),

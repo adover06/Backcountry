@@ -104,16 +104,21 @@ function Stepper({ activeStep, onSelect }) {
   );
 }
 
-function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputMode, setInputMode, trailName, setTrailName, onNameSearch }) {
+function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputMode, setInputMode, trailName, setTrailName, onNameSearch, onModeChange }) {
   const isGpxMode = inputMode === "gpx";
+  
+  const handleModeChange = (mode) => {
+    setInputMode(mode);
+    if (onModeChange) onModeChange(mode);
+  };
   
   return (
     <div className="space-y-8">
       <div className="flex gap-4 p-1 bg-slate-100 rounded-xl w-fit">
-        <button onClick={() => setInputMode("gpx")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${isGpxMode ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>
+        <button onClick={() => handleModeChange("gpx")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${isGpxMode ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>
           Upload GPX
         </button>
-        <button onClick={() => setInputMode("name")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${!isGpxMode ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>
+        <button onClick={() => handleModeChange("name")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${!isGpxMode ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>
           Name + Region
         </button>
       </div>
@@ -322,6 +327,7 @@ export default function App() {
   const [startDate, setStartDate] = useState("2026-04-30");
   const [endDate, setEndDate] = useState("2026-05-02");
   const [trailMatch, setTrailMatch] = useState(null);
+  const [selectedTrail, setSelectedTrail] = useState(null);
   const [selectedTrailId, setSelectedTrailId] = useState(null);
   const [checks, setChecks] = useState(null);
   const [planResult, setPlanResult] = useState(null);
@@ -367,6 +373,13 @@ export default function App() {
     if (file) setSelectedFile(file);
   };
   
+  const handleModeChange = (mode) => {
+    if (mode === "name") {
+      // Clear GPX state when switching to name search
+      setGpxRoute(null);
+    }
+  };
+  
   const handleUpload = async () => {
     if (!selectedFile) return;
     
@@ -391,6 +404,9 @@ export default function App() {
   const handleNameSearch = async () => {
     if (!trailName.trim()) return;
     
+    // Clear GPX state when switching to name search
+    setGpxRoute(null);
+    
     try {
       // Call trail match with just the name hint, no route
       const res = await fetch("/api/trail/match", {
@@ -404,6 +420,8 @@ export default function App() {
         addMessage("assistant", `Found: ${data.auto_selected.name} in ${data.auto_selected.area}. Continue to dates to set your trip window.`);
         setRoute(null); // No GPX route, just trail
         setSelectedTrailId(data.auto_selected.id);
+        setSelectedTrail(data.auto_selected);
+        setTrailMatch({ auto_selected: data.auto_selected, shortlist: data.shortlist || [data.auto_selected] });
         goToStep("dates");
       } else if (data.shortlist?.length) {
         setNameSearchResults(data.shortlist);
@@ -420,16 +438,25 @@ export default function App() {
     setSelectedTrailId(trail.id);
     setTrailName(trail.name);
     setTrailMatch({ auto_selected: trail, shortlist: [trail] });
+    setSelectedTrail(trail);
     setNameSearchResults([]);
     addMessage("assistant", `Selected: ${trail.name}. Continue to set your trip dates.`);
     goToStep("dates");
   };
   
   const handleDatesNext = async () => {
+    // If we have a trail from name search (no GPX), skip to checks directly
+    if (!gpxRoute && selectedTrailId) {
+      addMessage("assistant", "Running pre-trip checks for your selected trail...");
+      goToStep("checks");
+      await runPreTripChecks();
+      return;
+    }
+    
+    // Otherwise go to match step for GPX route
     goToStep("match");
     setLoading(true);
     
-    // If we have a GPX route, match it. Otherwise skip to checks with selected trail
     if (gpxRoute) {
       addMessage("assistant", "Matching your route to known trails in Northern CA...");
       
@@ -468,9 +495,10 @@ export default function App() {
     
     try {
       let data;
+      const hasGPX = selectedFile && gpxRoute; // Must have both file AND parsed route
       
-      if (selectedFile) {
-        // GPX upload path
+      if (hasGPX) {
+        console.log("GPX path: using /api/plan");
         const formData = new FormData();
         formData.append("file", selectedFile);
         formData.append("start_date", startDate);
@@ -479,27 +507,47 @@ export default function App() {
         
         const res = await fetch("/api/plan", { method: "POST", body: formData });
         data = await res.json();
-      } else if (selectedTrailId && trailMatch?.auto_selected) {
-        // Name search path - call checks directly for the trail
-        const trail = trailMatch.auto_selected;
-        const weatherRes = await fetch("/api/checks/weather", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lat: trail.lat, lng: trail.lng }),
-        });
-        const weather = await weatherRes.json();
+      } else if (selectedTrail) {
+        console.log("Name search path: calling checks APIs directly");
+        const trail = selectedTrail;
+        console.log("Trail coords:", trail.lat, trail.lng);
+        const payload = { lat: trail.lat, lng: trail.lng, start_date: startDate, end_date: endDate };
+        const [weatherRes, aqiRes, fireRes, snowRes] = await Promise.all([
+          fetch("/api/checks/weather", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+          fetch("/api/checks/aqi", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+          fetch("/api/checks/fire", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+          fetch("/api/checks/snow", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+        ]);
+        const [weather, aqi, fire, snow] = await Promise.all([
+          weatherRes.json(),
+          aqiRes.json(),
+          fireRes.json(),
+          snowRes.json(),
+        ]);
         
         data = {
-          checks: {
-            weather,
-            aqi: { error: "AQI requires API key" },
-            fire: { error: "Fire check requires GPX route" },
-            snow: { message: "Snow data unavailable" },
-          },
+          checks: { weather, aqi, fire, snow },
           risk: { status: "go", reasons: [] },
         };
       } else {
-        throw new Error("No trail selected. Please upload a GPX or search for a trail.");
+        console.log("No path: selectedFile=", !!selectedFile, "gpxRoute=", !!gpxRoute, "selectedTrailId=", selectedTrailId, "trailMatch=", !!trailMatch, "selectedTrail=", !!selectedTrail);
+        throw new Error("No trail selected. Please select a trail to run checks or upload a GPX route.");
       }
       
       setPlanResult(data);
@@ -532,6 +580,7 @@ export default function App() {
               trailName={trailName}
               setTrailName={setTrailName}
               onNameSearch={handleNameSearch}
+              onModeChange={handleModeChange}
             />
             {nameSearchResults.length > 0 && (
               <div className="grid gap-4 md:grid-cols-3 mt-6">
