@@ -183,11 +183,12 @@ async def plan_trip(
 async def check_water(payload: dict):
     lat = payload.get("lat")
     lng = payload.get("lng")
-    radius = payload.get("radius", 5.0)
+    radius = payload.get("radius", 0.5)
+    route_points = payload.get("route_points") or None
     if not lat or not lng:
         raise HTTPException(status_code=400, detail="lat and lng required")
-    logger.info(f"Water check for {lat}, {lng} (radius: {radius}mi)")
-    water = get_water_summary(lat, lng, radius_miles=radius)
+    logger.info(f"Water check for {lat}, {lng} (radius: {radius}mi, {len(route_points or [])} route pts)")
+    water = get_water_summary(lat, lng, radius_miles=radius, route_points=route_points)
     logger.info(f"Water result: {water.get('message')}")
     return water
 

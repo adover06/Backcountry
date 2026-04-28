@@ -70,6 +70,64 @@ function routeToFeature(routeData) {
 
 function getFireCount(fp) { return fp?.features?.length || 0; }
 
+function addDays(dateStr, n) {
+  if (!dateStr || n < 1) return "";
+  const d = new Date(dateStr + "T12:00:00");
+  d.setDate(d.getDate() + n - 1);
+  return d.toISOString().split("T")[0];
+}
+
+function getPointAtMile(pts, targetMile) {
+  if (!pts?.length) return null;
+  let dist = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = haversineMiles(pts[i-1].lat, pts[i-1].lng, pts[i].lat, pts[i].lng);
+    if (dist + seg >= targetMile) {
+      const t = seg > 0 ? (targetMile - dist) / seg : 0;
+      return { lat: pts[i-1].lat + t*(pts[i].lat - pts[i-1].lat), lng: pts[i-1].lng + t*(pts[i].lng - pts[i-1].lng) };
+    }
+    dist += seg;
+  }
+  return pts[pts.length - 1];
+}
+
+function getDaytimePeriods(forecast) {
+  return (forecast || []).filter(p => !/night|tonight/i.test(p.name || ""));
+}
+
+function checkStatus(key, data) {
+  if (!data) return null;
+  if (data.error) return { label: "Error", cls: "bg-red-50 text-red-700" };
+  if (key === "weather") {
+    const text = (data.forecast || []).slice(0, 3).map(f => f.short || "").join(" ").toLowerCase();
+    if (/thunder|severe/.test(text)) return { label: "Warning", cls: "bg-amber-50 text-amber-700" };
+    if (/shower|rain|drizzle|snow/.test(text)) return { label: "Caution", cls: "bg-yellow-50 text-yellow-700" };
+    return { label: "Good", cls: "bg-emerald-50 text-emerald-700" };
+  }
+  if (key === "aqi") {
+    const max = Math.max(0, ...(data.observations || []).map(o => o.aqi || 0));
+    if (max >= 150) return { label: "Warning", cls: "bg-red-50 text-red-700" };
+    if (max >= 100) return { label: "Caution", cls: "bg-amber-50 text-amber-700" };
+    return { label: "Good", cls: "bg-emerald-50 text-emerald-700" };
+  }
+  if (key === "fire") {
+    const count = data.perimeters?.features?.length || 0;
+    if (count > 0) return { label: "Caution", cls: "bg-amber-50 text-amber-700" };
+    return { label: "Good", cls: "bg-emerald-50 text-emerald-700" };
+  }
+  if (key === "snow") {
+    const depth = data.max_depth_in ?? 0;
+    if (depth >= 12) return { label: "Warning", cls: "bg-blue-50 text-blue-700" };
+    if (depth > 0) return { label: "Caution", cls: "bg-sky-50 text-sky-700" };
+    return { label: "Good", cls: "bg-emerald-50 text-emerald-700" };
+  }
+  if (key === "water") {
+    if ((data.count ?? 1) === 0) return { label: "Warning", cls: "bg-amber-50 text-amber-700" };
+    return { label: "Good", cls: "bg-emerald-50 text-emerald-700" };
+  }
+  return { label: "Good", cls: "bg-emerald-50 text-emerald-700" };
+}
+
 // ─── Small shared components ──────────────────────────────────────────────────
 
 function Spinner({ size = 4 }) {
@@ -266,8 +324,7 @@ function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputM
   );
 }
 
-function DatesStep({ startDate, endDate, onStartDateChange, onEndDateChange, onNext }) {
-  const isValid = startDate && endDate && new Date(startDate) <= new Date(endDate);
+function DatesStep({ startDate, onStartDateChange, numDays, setNumDays, endDate, onNext }) {
   return (
     <div className="space-y-8">
       <div className="grid grid-cols-2 gap-6">
@@ -276,12 +333,25 @@ function DatesStep({ startDate, endDate, onStartDateChange, onEndDateChange, onN
           <input type="date" className="mt-4 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm" value={startDate} onChange={(e) => onStartDateChange(e.target.value)} />
         </div>
         <div className="rounded-2xl bg-white p-6 shadow-sm">
-          <label className="text-xs uppercase tracking-[0.2em] text-slate-500">End date</label>
-          <input type="date" className="mt-4 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm" value={endDate} onChange={(e) => onEndDateChange(e.target.value)} />
+          <label className="text-xs uppercase tracking-[0.2em] text-slate-500">Trip length</label>
+          <div className="mt-4 flex items-center gap-4">
+            <button onClick={() => setNumDays(d => Math.max(1, d - 1))}
+              className="h-9 w-9 rounded-full border border-slate-200 text-xl font-semibold text-slate-600 hover:bg-slate-50 transition flex items-center justify-center">−</button>
+            <span className="text-2xl font-bold text-slate-900 w-8 text-center">{numDays}</span>
+            <button onClick={() => setNumDays(d => d + 1)}
+              className="h-9 w-9 rounded-full border border-slate-200 text-xl font-semibold text-slate-600 hover:bg-slate-50 transition flex items-center justify-center">+</button>
+            <span className="text-sm text-slate-500">{numDays === 1 ? "day" : "days"}</span>
+          </div>
         </div>
       </div>
+      {startDate && endDate && (
+        <div className="rounded-2xl border border-slate-100 bg-slate-50 px-5 py-4 flex gap-8 text-sm">
+          <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Return date</p><p className="mt-1 font-semibold text-slate-900">{endDate}</p></div>
+          <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Nights out</p><p className="mt-1 font-semibold text-slate-900">{numDays - 1}</p></div>
+        </div>
+      )}
       <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 text-sm text-emerald-800">Trips must begin within 10 days for the most accurate NOAA forecasts.</div>
-      <button onClick={onNext} disabled={!isValid}
+      <button onClick={onNext} disabled={!startDate}
         className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
         Continue to trail match
       </button>
@@ -412,7 +482,7 @@ function ItineraryStep({ route, selectedTrail, numDays, setNumDays, tripType, se
         </div>
       )}
 
-      <p className="text-xs text-slate-400">Drag-and-adjust coming soon — manual camp placement will be added in a future update.</p>
+      <p className="text-xs text-slate-400">Camp markers are draggable on the report map.</p>
 
       <button onClick={onNext}
         className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700">
@@ -456,16 +526,15 @@ function ChecksStep({ checks, checksLoading, onNext }) {
           const isLoading = checksLoading?.[key];
           const data = checks?.[key];
           const summary = getSummary(label, data);
-          const status = isLoading ? null : (data?.error ? "Attention" : data ? "Good" : null);
-          const cls = status === "Good" ? "bg-emerald-50 text-emerald-700" : status === "Attention" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700";
+          const st = isLoading ? null : checkStatus(key, data);
           return (
             <div key={key} className="rounded-2xl bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold text-slate-900">{label}</p>
                 {isLoading ? (
                   <span className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500"><Spinner /> Fetching</span>
-                ) : status ? (
-                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${cls}`}>{status}</span>
+                ) : st ? (
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${st.cls}`}>{st.label}</span>
                 ) : null}
               </div>
               <p className="mt-3 text-sm text-slate-600">{isLoading ? "" : (summary ?? "—")}</p>
@@ -483,9 +552,11 @@ function ChecksStep({ checks, checksLoading, onNext }) {
 
 // ─── Map components ───────────────────────────────────────────────────────────
 
-function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false }) {
+function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, heightClass }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const campMarkersRef = useRef([]);
+  const userWaterMarkersRef = useRef([]);
   const fireCount = getFireCount(firePerimeters);
 
   useEffect(() => {
@@ -570,8 +641,75 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
     if (map.getSource("water") && waterGeojson) map.getSource("water").setData(waterGeojson);
   }, [routeFeature, firePerimeters, snowGeojson, waterGeojson]);
 
+  // Draggable camp markers
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !itineraryDays?.length || !routePoints?.length) return;
+    campMarkersRef.current.forEach(m => m.remove());
+    campMarkersRef.current = [];
+    const camps = itineraryDays.slice(0, -1);
+    const addMarkers = () => {
+      camps.forEach((day) => {
+        const pt = getPointAtMile(routePoints, day.endMile);
+        if (!pt) return;
+        const el = document.createElement("div");
+        el.style.cssText = "width:26px;height:26px;background:#10b981;border:2.5px solid #065f46;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:white;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.3);user-select:none;";
+        el.textContent = day.day;
+        const popup = new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
+          `<div style="font-size:12px"><strong>Camp — Day ${day.day}</strong><br/>Mile ${day.endMile} · ${day.miles} mi today</div>`
+        );
+        const marker = new mapboxgl.Marker({ element: el, draggable: true }).setLngLat([pt.lng, pt.lat]).setPopup(popup).addTo(map);
+        el.addEventListener("mouseenter", () => marker.togglePopup());
+        el.addEventListener("mouseleave", () => { if (marker.getPopup().isOpen()) marker.togglePopup(); });
+        campMarkersRef.current.push(marker);
+      });
+    };
+    if (map.isStyleLoaded()) addMarkers(); else map.once("load", addMarkers);
+    return () => { campMarkersRef.current.forEach(m => m.remove()); campMarkersRef.current = []; map.off("load", addMarkers); };
+  }, [itineraryDays, routePoints]);
+
+  // User-added water spots
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    userWaterMarkersRef.current.forEach(m => m.remove());
+    userWaterMarkersRef.current = [];
+    const addUserMarkers = () => {
+      (userWaterSpots || []).forEach((spot) => {
+        const el = document.createElement("div");
+        el.style.cssText = "width:24px;height:24px;background:#0891b2;border:2px solid #0e7490;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,0.25);";
+        el.textContent = "💧";
+        const popup = new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
+          `<div style="font-size:12px"><strong>${spot.name || "Water source"}</strong><br/><em>User-added</em></div>`
+        );
+        const marker = new mapboxgl.Marker({ element: el }).setLngLat([spot.lng, spot.lat]).setPopup(popup).addTo(map);
+        el.addEventListener("mouseenter", () => marker.togglePopup());
+        el.addEventListener("mouseleave", () => { if (marker.getPopup().isOpen()) marker.togglePopup(); });
+        userWaterMarkersRef.current.push(marker);
+      });
+    };
+    if (map.isStyleLoaded()) addUserMarkers(); else map.once("load", addUserMarkers);
+    return () => { userWaterMarkersRef.current.forEach(m => m.remove()); userWaterMarkersRef.current = []; map.off("load", addUserMarkers); };
+  }, [userWaterSpots]);
+
+  // Click handler for adding user water spots
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !onAddWaterSpot) return;
+    const handleClick = (e) => { if (addWaterMode) onAddWaterSpot({ lat: e.lngLat.lat, lng: e.lngLat.lng, name: "Water source" }); };
+    map.on("click", handleClick);
+    return () => map.off("click", handleClick);
+  }, [addWaterMode, onAddWaterSpot]);
+
+  // Crosshair cursor in add-water mode
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.getCanvas().style.cursor = addWaterMode ? "crosshair" : "";
+  }, [addWaterMode]);
+
   return (
-    <div className="relative h-[calc(100vh-9.25rem)] min-h-[42rem] overflow-hidden bg-slate-900">
+    <div className={`relative ${heightClass || "h-[calc(100vh-9.25rem)]"} min-h-[36rem] overflow-hidden bg-slate-900`}>
       {import.meta.env.VITE_MAPBOX_TOKEN ? (
         <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
       ) : (
@@ -661,12 +799,25 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         </div>
       ) : null}
 
+      {/* Add water source button (plan mode only) */}
+      {!exploreMode && onAddWaterSpot && (
+        <div className="pointer-events-auto absolute bottom-6 right-6 flex flex-col items-end gap-1">
+          <button onClick={() => setAddWaterMode?.(m => !m)}
+            className={`rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition backdrop-blur ${addWaterMode ? "bg-cyan-600 text-white" : "bg-white/90 text-cyan-700 border border-cyan-200 hover:bg-cyan-50"}`}>
+            {addWaterMode ? "Click map to place · tap again to stop" : "+ Add water source"}
+          </button>
+          {(userWaterSpots?.length || 0) > 0 && !addWaterMode && (
+            <span className="text-[10px] text-white/70">{userWaterSpots.length} user-added</span>
+          )}
+        </div>
+      )}
+
       <ElevationProfile route={route} />
     </div>
   );
 }
 
-function ReportStep({ planResult, selectedTrail }) {
+function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode }) {
   const route = planResult?.route;
   const mapLayers = planResult?.map_layers;
   const checks = planResult?.checks;
@@ -676,20 +827,106 @@ function ReportStep({ planResult, selectedTrail }) {
   const waterGeojson = checks?.water?.geojson || null;
   const routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
   const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
+  const daytimePeriods = getDaytimePeriods(checks?.weather?.forecast);
+  const risk = planResult?.risk || computeRisk(checks || {});
+
+  const riskColor = risk.status === "no-go" ? { bg: "bg-red-50 border-red-200", text: "text-red-700", label: "No-Go" }
+    : risk.status === "caution" ? { bg: "bg-amber-50 border-amber-200", text: "text-amber-700", label: "Caution" }
+    : { bg: "bg-emerald-50 border-emerald-200", text: "text-emerald-700", label: "Good to Go" };
 
   return (
-    <MapCanvas
-      routeFeature={routeFeature}
-      firePerimeters={firePerimeters}
-      snowGeojson={snowGeojson}
-      waterGeojson={waterGeojson}
-      fallbackCenter={fallbackCenter}
-      report={report}
-      checks={checks}
-      selectedTrail={selectedTrail}
-      route={route}
-      exploreMode={false}
-    />
+    <div>
+      <MapCanvas
+        routeFeature={routeFeature}
+        firePerimeters={firePerimeters}
+        snowGeojson={snowGeojson}
+        waterGeojson={waterGeojson}
+        fallbackCenter={fallbackCenter}
+        report={report}
+        checks={checks}
+        selectedTrail={selectedTrail}
+        route={route}
+        exploreMode={false}
+        itineraryDays={itineraryDays}
+        routePoints={routePoints}
+        userWaterSpots={userWaterSpots}
+        onAddWaterSpot={onAddWaterSpot}
+        addWaterMode={addWaterMode}
+        setAddWaterMode={setAddWaterMode}
+        heightClass="h-[58vh]"
+      />
+
+      <div className="bg-[#f6f3ee] border-t border-slate-200">
+        <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10">
+
+          {/* Trip status */}
+          <div className={`rounded-2xl border p-5 ${riskColor.bg}`}>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Trip status</p>
+            <p className={`mt-1 text-2xl font-bold ${riskColor.text}`}>{riskColor.label}</p>
+            {risk.reasons?.length > 0 && (
+              <ul className="mt-3 space-y-1">
+                {risk.reasons.map((r, i) => <li key={i} className="text-sm text-slate-700 flex gap-2"><span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current inline-block" />{r}</li>)}
+              </ul>
+            )}
+          </div>
+
+          {/* Per-day forecast */}
+          {itineraryDays?.length > 0 && (
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500 mb-5">Day-by-day forecast</p>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {itineraryDays.map((day, i) => {
+                  const period = daytimePeriods[i];
+                  const wText = (period?.short || "").toLowerCase();
+                  const isWarn = /thunder|severe/.test(wText);
+                  const isCaution = /shower|rain|drizzle|snow/.test(wText);
+                  return (
+                    <div key={day.day} className="rounded-2xl bg-white p-5 shadow-sm">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Day {day.day}</p>
+                          <p className="mt-0.5 text-xs text-slate-400">{period?.name || "—"}</p>
+                        </div>
+                        {(isWarn || isCaution) && (
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${isWarn ? "bg-amber-100 text-amber-700" : "bg-yellow-100 text-yellow-700"}`}>
+                            {isWarn ? "Storm" : "Rain"}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-3 font-semibold text-slate-900 text-sm">{period?.short || "No forecast available"}</p>
+                      {period && <p className="mt-1 text-xs text-slate-500">{period.temp}{period.temp_unit} · {period.wind}</p>}
+                      <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-400">
+                        Mile {day.startMile} → {day.endMile} · {day.miles} mi
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Conditions summary */}
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-500 mb-5">Conditions summary</p>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                { label: "Fire areas", value: String(checks?.fire?.perimeters?.features?.length || 0), sub: "in region", warn: (checks?.fire?.perimeters?.features?.length || 0) > 0 },
+                { label: "Snow depth", value: `${checks?.snow?.max_depth_in ?? "--"} in`, sub: "at highest point", warn: (checks?.snow?.max_depth_in || 0) > 0 },
+                { label: "AQI", value: String(checks?.aqi?.observations?.[0]?.aqi ?? "--"), sub: checks?.aqi?.observations?.[0]?.category || "", warn: (checks?.aqi?.observations?.[0]?.aqi || 0) >= 100 },
+                { label: "Water sources", value: String(checks?.water?.count ?? "--"), sub: checks?.water?.nearest_mi != null ? `nearest ${checks.water.nearest_mi} mi` : "", warn: (checks?.water?.count ?? 1) === 0 },
+              ].map(c => (
+                <div key={c.label} className={`rounded-2xl p-5 shadow-sm ${c.warn ? "bg-amber-50" : "bg-white"}`}>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{c.label}</p>
+                  <p className={`mt-1 text-2xl font-bold ${c.warn ? "text-amber-800" : "text-slate-900"}`}>{c.value}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">{c.sub}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -906,7 +1143,6 @@ export function PlanView({ onBack }) {
   const [route, setRoute] = useState(null);
   const [gpxRoute, setGpxRoute] = useState(null);
   const [startDate, setStartDate] = useState("2026-04-30");
-  const [endDate, setEndDate] = useState("2026-05-02");
   const [trailMatch, setTrailMatch] = useState(null);
   const [selectedTrail, setSelectedTrail] = useState(null);
   const [selectedTrailId, setSelectedTrailId] = useState(null);
@@ -921,7 +1157,19 @@ export function PlanView({ onBack }) {
   const [trailName, setTrailName] = useState("");
   const [nameSearchResults, setNameSearchResults] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [userWaterSpots, setUserWaterSpots] = useState([]);
+  const [addWaterMode, setAddWaterMode] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Derived values
+  const endDate = addDays(startDate, numDays);
+  const rawMiles = parseFloat(gpxRoute?.distance_mi || selectedTrail?.length_miles || 0);
+  const effectiveMiles = tripType === "out-and-back" ? rawMiles * 2 : rawMiles;
+  const milesPerDay = numDays > 0 && effectiveMiles > 0 ? effectiveMiles / numDays : 0;
+  const itineraryDays = Array.from({ length: numDays }, (_, i) => ({
+    day: i + 1, startMile: +(i * milesPerDay).toFixed(1), endMile: +((i + 1) * milesPerDay).toFixed(1), miles: +milesPerDay.toFixed(1),
+  }));
+  const routePoints = gpxRoute?.points || (selectedTrail?.geometry?.coordinates || []).map(c => ({ lat: c[1], lng: c[0] }));
 
   const stepIndex = PLAN_STEPS.findIndex((s) => s.id === activeStep);
   const progress = ((stepIndex + 1) / PLAN_STEPS.length) * 100;
@@ -1045,12 +1293,16 @@ export function PlanView({ onBack }) {
       return result;
     };
 
+    const sampleRoutePoints = routePoints?.length
+      ? routePoints.filter((_, i) => i % Math.max(1, Math.floor(routePoints.length / 20)) === 0).slice(0, 20)
+      : null;
+
     const [weather, aqi, fire, snow, water] = await Promise.all([
       runCheck("weather", "/api/checks/weather", payload),
       runCheck("aqi", "/api/checks/aqi", payload),
       runCheck("fire", "/api/checks/fire", { ...payload, radius: 50.0 }),
       runCheck("snow", "/api/checks/snow", { ...payload, radius: 5.0 }),
-      runCheck("water", "/api/checks/water", { lat, lng, radius: 5.0 }),
+      runCheck("water", "/api/checks/water", { lat, lng, radius: 0.5, route_points: sampleRoutePoints }),
     ]);
 
     const allChecks = { weather, aqi, fire, snow, water };
@@ -1105,7 +1357,16 @@ export function PlanView({ onBack }) {
 
       <main>
         {isReportStep ? (
-          <ReportStep planResult={planResult} selectedTrail={selectedTrail} />
+          <ReportStep
+            planResult={planResult}
+            selectedTrail={selectedTrail}
+            itineraryDays={itineraryDays}
+            routePoints={routePoints}
+            userWaterSpots={userWaterSpots}
+            onAddWaterSpot={(spot) => setUserWaterSpots(prev => [...prev, spot])}
+            addWaterMode={addWaterMode}
+            setAddWaterMode={setAddWaterMode}
+          />
         ) : (
           <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10">
             {activeStep === "upload" && (
@@ -1130,7 +1391,7 @@ export function PlanView({ onBack }) {
               </div>
             )}
             {activeStep === "dates" && (
-              <DatesStep startDate={startDate} endDate={endDate} onStartDateChange={setStartDate} onEndDateChange={setEndDate} onNext={handleDatesNext} />
+              <DatesStep startDate={startDate} onStartDateChange={setStartDate} numDays={numDays} setNumDays={setNumDays} endDate={endDate} onNext={handleDatesNext} />
             )}
             {activeStep === "match" && (
               <MatchStep
