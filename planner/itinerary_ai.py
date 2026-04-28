@@ -8,8 +8,8 @@ import re
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://100.86.195.79:11434/v1")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://chinky.gerardconsuelo.com/v1")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
 
 
 def _clean(text: str) -> str:
@@ -120,7 +120,7 @@ def generate_report(
     num_days: int,
     days: list[dict],
     checks: dict,
-    timeout: int = 90,
+    timeout: int = 180,
 ) -> dict:
     try:
         from openai import OpenAI

@@ -715,15 +715,20 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         });
       }
 
-      // Water-spot click handler — uses refs so closure is never stale
-      if (!exploreMode) {
-        map.on("click", (e) => {
-          if (addWaterModeRef.current && onAddWaterSpotRef.current) {
-            onAddWaterSpotRef.current({ lat: e.lngLat.lat, lng: e.lngLat.lng, name: "Water source" });
-          }
-        });
-      }
     });
+
+    // Register click handler directly on the map object (not inside load callback)
+    // so it fires reliably regardless of terrain/layer event ordering
+    if (!exploreMode) {
+      const waterClickHandler = (e) => {
+        if (addWaterModeRef.current && onAddWaterSpotRef.current) {
+          // Don't fire if user clicked a popup or UI control
+          if (e.originalEvent?.target?.closest?.(".mapboxgl-popup, .mapboxgl-ctrl")) return;
+          onAddWaterSpotRef.current({ lat: e.lngLat.lat, lng: e.lngLat.lng, name: "Water source" });
+        }
+      };
+      map.on("click", waterClickHandler);
+    }
 
     return () => { map.remove(); mapRef.current = null; };
   }, [styleUrl]);
@@ -845,43 +850,43 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         <div className="absolute inset-0 flex items-center justify-center bg-slate-100 text-slate-400">Mapbox token missing</div>
       )}
 
-      {/* Route overview card */}
-      <div className="pointer-events-none absolute left-6 top-6 max-w-xs rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
+      {/* Route overview card — always light (map is always outdoors style) */}
+      <div className="pointer-events-none absolute left-6 top-6 max-w-xs rounded-3xl border border-slate-200/60 p-5 shadow-2xl backdrop-blur" style={{ backgroundColor: "rgba(255,255,255,0.93)", color: "#0f172a" }}>
         <p className="text-xs uppercase tracking-[0.3em] text-slate-500">{exploreMode ? "Explore" : "Route Overview"}</p>
         <h3 className="mt-2 text-xl font-semibold text-slate-950">{selectedTrail?.name || "3D trip map"}</h3>
         <p className="mt-1 text-xs text-slate-500">{selectedTrail?.area || ""}</p>
         <div className={`mt-4 grid gap-3 text-sm ${exploreMode ? "grid-cols-2" : "grid-cols-2"}`}>
-          <div className="rounded-2xl bg-emerald-50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-emerald-700">Route</p>
-            <p className="mt-1 font-semibold text-emerald-950">{routeFeature ? "Loaded" : "Point only"}</p>
+          <div className="rounded-2xl p-3" style={{ backgroundColor: "#ecfdf5" }}>
+            <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#065f46" }}>Route</p>
+            <p className="mt-1 font-semibold" style={{ color: "#022c22" }}>{routeFeature ? "Loaded" : "Point only"}</p>
           </div>
           {!exploreMode && (
-            <div className="rounded-2xl bg-orange-50 p-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-orange-700">Fire</p>
-              <p className="mt-1 font-semibold text-orange-950">{fireCount} areas</p>
+            <div className="rounded-2xl p-3" style={{ backgroundColor: "#fff7ed" }}>
+              <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#c2410c" }}>Fire</p>
+              <p className="mt-1 font-semibold" style={{ color: "#431407" }}>{fireCount} areas</p>
             </div>
           )}
           {!exploreMode && (
-            <div className="rounded-2xl bg-sky-50 p-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-sky-700">Snow</p>
-              <p className="mt-1 font-semibold text-sky-950">{checks?.snow?.max_depth_in ?? "--"} in</p>
+            <div className="rounded-2xl p-3" style={{ backgroundColor: "#f0f9ff" }}>
+              <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#0369a1" }}>Snow</p>
+              <p className="mt-1 font-semibold" style={{ color: "#0c4a6e" }}>{checks?.snow?.max_depth_in ?? "--"} in</p>
             </div>
           )}
           {!exploreMode && (
-            <div className="rounded-2xl bg-cyan-50 p-3">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-cyan-700">Water</p>
-              <p className="mt-1 font-semibold text-cyan-950">{checks?.water?.count ?? "--"} sources</p>
+            <div className="rounded-2xl p-3" style={{ backgroundColor: "#ecfeff" }}>
+              <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#0e7490" }}>Water</p>
+              <p className="mt-1 font-semibold" style={{ color: "#083344" }}>{checks?.water?.count ?? "--"} sources</p>
             </div>
           )}
-          <div className="rounded-2xl bg-slate-50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Distance</p>
-            <p className="mt-1 font-semibold text-slate-900">{route?.distance_mi?.toFixed?.(1) || selectedTrail?.length_miles || "--"} mi</p>
+          <div className="rounded-2xl p-3" style={{ backgroundColor: "#f8fafc" }}>
+            <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#64748b" }}>Distance</p>
+            <p className="mt-1 font-semibold" style={{ color: "#0f172a" }}>{route?.length_miles?.toFixed?.(1) || selectedTrail?.length_miles || "--"} mi</p>
           </div>
         </div>
       </div>
 
-      {/* Legend */}
-      <div className="pointer-events-none absolute bottom-6 left-6 rounded-2xl border border-white/30 bg-white/90 p-4 text-sm shadow-2xl backdrop-blur">
+      {/* Legend — always light */}
+      <div className="pointer-events-none absolute bottom-6 left-6 rounded-2xl border border-slate-200/60 p-4 text-sm shadow-2xl backdrop-blur" style={{ backgroundColor: "rgba(255,255,255,0.93)", color: "#0f172a" }}>
         <div className="flex items-center gap-3">
           <span className="h-1.5 w-10 rounded-full bg-teal-900 shadow-[0_0_0_6px_rgba(20,184,166,0.25)]" />
           <span className="font-medium text-slate-800">GPX/trail route</span>
@@ -904,26 +909,15 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         )}
       </div>
 
-      {/* Briefing card (plan mode only) */}
-      {!exploreMode && report?.bullets?.length ? (
-        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
+      {/* Briefing card — always light */}
+      {!exploreMode && checks ? (
+        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-slate-200/60 p-5 shadow-2xl backdrop-blur" style={{ backgroundColor: "rgba(255,255,255,0.93)", color: "#0f172a" }}>
           <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Briefing</p>
-          <ul className="mt-4 space-y-3 text-sm text-slate-700">
-            {report.bullets.slice(0, 4).map((b, i) => (
-              <li key={i} className="flex gap-3">
-                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-                <span>{b}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : !exploreMode && checks ? (
-        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Telemetry</p>
           <div className="mt-4 space-y-2 text-sm text-slate-700">
-            <p>Weather: {checks.weather?.forecast?.[0]?.short || "Loaded"}</p>
-            <p>AQI: {checks.aqi?.observations?.[0]?.aqi ?? "—"}</p>
-            <p>Snow: {checks.snow?.message || "Loaded"}</p>
+            <p><span className="font-semibold">Weather:</span> {checks.weather?.forecast?.[0]?.short || "—"}</p>
+            <p><span className="font-semibold">AQI:</span> {checks.aqi?.observations?.[0]?.aqi ?? "—"}</p>
+            <p><span className="font-semibold">Snow:</span> {checks.snow?.max_depth_in != null ? `${checks.snow.max_depth_in} in` : "None"}</p>
+            <p><span className="font-semibold">Water:</span> {checks.water?.count ?? "—"} sources</p>
           </div>
         </div>
       ) : null}
@@ -962,7 +956,11 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
   let routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
   if (tripType === "out-and-back" && routeFeature?.geometry?.coordinates?.length >= 10) {
     const fwd = routeFeature.geometry.coordinates;
-    routeFeature = { ...routeFeature, geometry: { type: "LineString", coordinates: [...fwd, ...[...fwd].reverse().slice(1)] } };
+    const first = fwd[0], last = fwd[fwd.length - 1];
+    const isClosedLoop = Math.abs(first[0] - last[0]) < 0.001 && Math.abs(first[1] - last[1]) < 0.001;
+    if (!isClosedLoop) {
+      routeFeature = { ...routeFeature, geometry: { type: "LineString", coordinates: [...fwd, ...[...fwd].reverse().slice(1)] } };
+    }
   }
 
   const daytimePeriods = getDaytimePeriods(checks?.weather?.forecast);
@@ -1068,15 +1066,18 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Overview</p>
-              <button onClick={fetchAiReport} disabled={aiLoading || !checks}
+              <button onClick={fetchAiReport} disabled={aiLoading}
                 className="rounded-full border border-emerald-300 px-4 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition disabled:opacity-40">
                 {aiLoading ? "Generating…" : aiReport ? "Regenerate AI" : "Generate AI Report"}
               </button>
             </div>
-            {aiLoading && <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner />Asking AI for a trip overview…</div>}
+            {aiLoading && <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner size={3} />Asking AI for a trip overview — this may take up to 30 seconds…</div>}
+            {aiReport?.error && !aiLoading && (
+              <p className="text-sm text-red-500">AI error: {aiReport.error}</p>
+            )}
             {ai?.overview ? (
               <p className="text-sm text-slate-700 leading-relaxed">{ai.overview}</p>
-            ) : !aiLoading && (
+            ) : !aiLoading && !aiReport?.error && (
               <p className="text-sm text-slate-400 italic">Hit "Generate AI Report" for a narrative overview of this trip.</p>
             )}
             {risk.reasons?.length > 0 && (
