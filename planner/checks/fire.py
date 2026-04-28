@@ -6,7 +6,7 @@ import requests
 from datetime import datetime, timezone
 
 
-NIFC_PERIMETERS = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/ArcGIS/rest/services/USFS_Active_Fire_Perimeters/FeatureServer/0/query"
+NIFC_PERIMETERS = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/ArcGIS/rest/services/WFIGS_Interagency_Perimeters/FeatureServer/0/query"
 
 
 def _days_ago(epoch_ms: int) -> int:
@@ -23,6 +23,9 @@ def get_fire_summary(route: dict) -> dict:
             "where": "1=1",
             "outFields": "*",
             "f": "geojson",
+            "resultRecordCount": 2000,
+            "returnGeometry": "true",
+            "outSR": 4326,
         }
         r = requests.get(NIFC_PERIMETERS, params=params, timeout=12)
         r.raise_for_status()

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import mapboxgl from "mapbox-gl";
 import "./index.css";
 
 const steps = [
@@ -197,6 +198,7 @@ function DatesStep({ startDate, endDate, onStartDateChange, onEndDateChange, onN
 function MatchStep({ route, trailMatch, selectedTrailId, onTrailSelect, onNext, loading }) {
   const autoSelected = trailMatch?.auto_selected;
   const shortlist = trailMatch?.shortlist || [];
+  const hasRoute = !!route && (route.points?.length || route.midpoint);
   
   return (
     <div className="space-y-8">
@@ -221,7 +223,7 @@ function MatchStep({ route, trailMatch, selectedTrailId, onTrailSelect, onNext, 
           ))}
         </div>
       )}
-      {!autoSelected && shortlist.length === 0 && !loading && route && (
+      {!autoSelected && shortlist.length === 0 && !loading && hasRoute && (
         <div className="rounded-2xl bg-white p-6 shadow-sm text-center py-12">
           <p className="text-slate-500">No matching trails found. Continuing without trail match.</p>
         </div>
@@ -250,12 +252,35 @@ function ChecksStep({ checks, loading, onNext }) {
     { label: "Fire", data: checks?.fire },
     { label: "Snow", data: checks?.snow },
   ];
+
+  const getSummary = (label, data) => {
+    if (!data) return "Loading...";
+    if (data.error) return data.error;
+    if (label === "Weather" && data.forecast?.length) {
+      const next = data.forecast[0];
+      return `${next.short} · ${next.temp} ${next.temp_unit} · ${next.wind}`;
+    }
+    if (label === "AQI" && data.observations?.length) {
+      const obs = data.observations[0];
+      return `${obs.parameter} AQI ${obs.aqi} (${obs.category})`;
+    }
+    if (label === "Fire" && data.perimeters?.features) {
+      return `${data.perimeters.features.length} fire perimeters loaded`;
+    }
+    if (label === "Snow" && data.image_url) {
+      return "Latest NOHRSC snow depth image available.";
+    }
+    if (label === "Snow" && data.message) {
+      return data.message;
+    }
+    return "Loading...";
+  };
   
   return (
     <div className="space-y-8">
       <div className="grid gap-4 md:grid-cols-2">
         {checkItems.map(({ label, data }) => {
-          const status = data?.overall_status || "Unknown";
+          const status = data?.overall_status || (data?.error ? "Attention" : "Good");
           const statusClass = status === "Good" ? "bg-emerald-50 text-emerald-700" : status === "Caution" ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-700";
           return (
             <div key={label} className="rounded-2xl bg-white p-6 shadow-sm">
@@ -263,7 +288,7 @@ function ChecksStep({ checks, loading, onNext }) {
                 <p className="text-sm font-semibold text-slate-900">{label}</p>
                 <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass}`}>{status}</span>
               </div>
-              <p className="mt-3 text-sm text-slate-600">{data?.summary || "Loading..."}</p>
+              <p className="mt-3 text-sm text-slate-600">{getSummary(label, data)}</p>
             </div>
           );
         })}
@@ -275,9 +300,127 @@ function ChecksStep({ checks, loading, onNext }) {
   );
 }
 
-function ReportStep({ planResult }) {
+function ReportStep({ planResult, selectedTrail }) {
   const report = planResult?.report;
   const mapLayers = planResult?.map_layers;
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const firePerimeters = mapLayers?.fire_perimeters || planResult?.checks?.fire?.perimeters || null;
+  const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) return;
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (!token) return;
+    mapboxgl.accessToken = token;
+
+    const routeCoords = mapLayers?.route?.geometry?.coordinates || [];
+    const center = routeCoords[0] || fallbackCenter || [-120.1287, 38.8649];
+
+    const map = new mapboxgl.Map({
+      container: mapContainerRef.current,
+      style: "mapbox://styles/mapbox/outdoors-v12",
+      center,
+      zoom: 9,
+      pitch: 45,
+      bearing: -12,
+    });
+    mapRef.current = map;
+
+    map.on("load", () => {
+      map.addSource("mapbox-dem", {
+        type: "raster-dem",
+        url: "mapbox://mapbox.terrain-rgb",
+        tileSize: 512,
+        maxzoom: 14,
+      });
+      map.setTerrain({ source: "mapbox-dem", exaggeration: 1.2 });
+      map.addLayer({
+        id: "sky",
+        type: "sky",
+        paint: {
+          "sky-type": "atmosphere",
+          "sky-atmosphere-sun": [0.0, 0.0],
+          "sky-atmosphere-sun-intensity": 15,
+        },
+      });
+
+      if (routeCoords.length) {
+        const bounds = routeCoords.reduce((b, coord) => b.extend(coord), new mapboxgl.LngLatBounds(routeCoords[0], routeCoords[0]));
+        map.fitBounds(bounds, { padding: 80, duration: 900 });
+        map.addSource("route", {
+          type: "geojson",
+          data: mapLayers.route,
+        });
+        map.addLayer({
+          id: "route-line",
+          type: "line",
+          source: "route",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: { "line-color": "#0f766e", "line-width": 5 },
+        });
+      } else if (fallbackCenter) {
+        map.addSource("trail-point", {
+          type: "geojson",
+          data: {
+            type: "Feature",
+            geometry: { type: "Point", coordinates: fallbackCenter },
+            properties: {},
+          },
+        });
+        map.addLayer({
+          id: "trail-point",
+          type: "circle",
+          source: "trail-point",
+          paint: { "circle-radius": 10, "circle-color": "#0f766e", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2 },
+        });
+      }
+
+      if (firePerimeters) {
+        map.addSource("fire", {
+          type: "geojson",
+          data: firePerimeters,
+        });
+        map.addLayer({
+          id: "fire-fill",
+          type: "fill",
+          source: "fire",
+          paint: { "fill-color": "#f97316", "fill-opacity": 0.2 },
+        });
+        map.addLayer({
+          id: "fire-outline",
+          type: "line",
+          source: "fire",
+          paint: { "line-color": "#ea580c", "line-width": 1 },
+        });
+      }
+    });
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [mapLayers, selectedTrail, firePerimeters, fallbackCenter]);
+
+  useEffect(() => {
+    if (mapRef.current) {
+      mapRef.current.resize();
+    }
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const routeCoords = mapLayers?.route?.geometry?.coordinates || [];
+    if (map.getSource("route") && routeCoords.length) {
+      map.getSource("route").setData(mapLayers.route);
+    }
+    if (map.getSource("fire") && firePerimeters) {
+      map.getSource("fire").setData(firePerimeters);
+    }
+  }, [mapLayers, firePerimeters]);
   
   return (
     <div className="space-y-8">
@@ -301,14 +444,32 @@ function ReportStep({ planResult }) {
             <h3 className="mt-2 text-2xl font-semibold text-slate-900">3D route overview</h3>
             <p className="mt-2 text-sm text-slate-600">Route line, fire perimeters, and terrain visualization will render here.</p>
           </div>
-          {mapLayers ? (
-            <div className="rounded-2xl bg-emerald-600/10 px-4 py-2 text-xs font-semibold text-emerald-700">Data loaded</div>
-          ) : (
-            <div className="rounded-2xl bg-amber-600/10 px-4 py-2 text-xs font-semibold text-amber-700">Demo layer</div>
-          )}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsFullscreen((prev) => !prev)}
+              className="rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-700 hover:border-emerald-400"
+            >
+              {isFullscreen ? "Exit full screen" : "Full screen"}
+            </button>
+            {mapLayers || selectedTrail ? (
+              <div className="rounded-2xl bg-emerald-600/10 px-4 py-2 text-xs font-semibold text-emerald-700">Data loaded</div>
+            ) : (
+              <div className="rounded-2xl bg-amber-600/10 px-4 py-2 text-xs font-semibold text-amber-700">Demo layer</div>
+            )}
+          </div>
         </div>
-        <div className="mt-6 h-64 rounded-2xl border border-emerald-100 bg-white/70 flex items-center justify-center text-slate-400">
-          {mapLayers ? `Route: ${mapLayers.route_coordinates?.length || 0} points` : "Mapbox canvas placeholder"}
+        <div className={classNames(
+          "mt-6 rounded-2xl border border-emerald-100 overflow-hidden bg-white/70",
+          isFullscreen ? "fixed inset-8 z-50" : "h-[28rem]"
+        )}>
+          {(mapLayers || selectedTrail) && import.meta.env.VITE_MAPBOX_TOKEN ? (
+            <div ref={mapContainerRef} className="h-full w-full" />
+          ) : (
+            <div className="h-full w-full flex items-center justify-center text-slate-400">
+              {mapLayers || selectedTrail ? "Mapbox token missing" : "Mapbox canvas placeholder"}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -454,7 +615,6 @@ export default function App() {
     }
     
     // Otherwise go to match step for GPX route
-    goToStep("match");
     setLoading(true);
     
     if (gpxRoute) {
@@ -474,10 +634,12 @@ export default function App() {
         } else if (data.shortlist?.length) {
           addMessage("assistant", `Found ${data.shortlist.length} candidate trails.`);
         } else {
-          addMessage("assistant", "No matching trails found. You can proceed without a trail match.");
+          addMessage("assistant", "No matching trails found. You can proceed without trail matching.");
         }
+        goToStep("match");
       } catch (err) {
         addMessage("assistant", "Could not match trail. You can proceed without trail matching.");
+        goToStep("match");
       }
     } else if (selectedTrailId) {
       // Using name search trail - skip match step, go to checks
@@ -602,7 +764,7 @@ export default function App() {
       case "checks":
         return <ChecksStep checks={checks} loading={loading} onNext={handleChecksNext} />;
       case "report":
-        return <ReportStep planResult={planResult} />;
+        return <ReportStep planResult={planResult} selectedTrail={selectedTrail} />;
       default:
         return null;
     }
