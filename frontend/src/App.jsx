@@ -419,6 +419,7 @@ export default function App() {
   const handleNameSelect = (trail) => {
     setSelectedTrailId(trail.id);
     setTrailName(trail.name);
+    setTrailMatch({ auto_selected: trail, shortlist: [trail] });
     setNameSearchResults([]);
     addMessage("assistant", `Selected: ${trail.name}. Continue to set your trip dates.`);
     goToStep("dates");
