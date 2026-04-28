@@ -27,7 +27,7 @@ from planner.checks.water import get_water_summary
 from planner.risk_engine import evaluate_risk
 from planner.report_ai import build_ai_report
 from planner.map_layers import build_map_layers
-from planner.itinerary_ai import generate_itinerary
+from planner.itinerary_ai import generate_itinerary, generate_report
 
 
 router = APIRouter()
@@ -205,6 +205,20 @@ async def plan_itinerary(payload: dict):
     checks = payload.get("checks") or {}
     logger.info(f"AI itinerary for {trail_name} ({num_days} days, {total_miles} mi)")
     result = generate_itinerary(trail_name, area, total_miles, trip_type, num_days, days, checks)
+    return result
+
+
+@router.post("/api/plan/report")
+async def plan_report(payload: dict):
+    trail_name = payload.get("trail_name") or "Unknown Trail"
+    area = payload.get("area") or ""
+    total_miles = float(payload.get("total_miles") or 0)
+    trip_type = payload.get("trip_type") or "out-and-back"
+    num_days = int(payload.get("num_days") or 1)
+    days = payload.get("days") or []
+    checks = payload.get("checks") or {}
+    logger.info(f"AI report for {trail_name} ({num_days} days) with checks")
+    result = generate_report(trail_name, area, total_miles, trip_type, num_days, days, checks)
     return result
 
 

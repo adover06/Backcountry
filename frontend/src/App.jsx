@@ -731,20 +731,41 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (map.getSource("route") && routeFeature) map.getSource("route").setData(routeFeature);
-    if (map.getSource("fire") && firePerimeters) map.getSource("fire").setData(firePerimeters);
-    if (map.getSource("snow") && snowGeojson) map.getSource("snow").setData(snowGeojson);
-    if (map.getSource("water") && waterGeojson) map.getSource("water").setData(waterGeojson);
-  }, [routeFeature, firePerimeters, snowGeojson, waterGeojson, styleUrl]);
+
+    const apply = () => {
+      if (routeFeature) {
+        const coords = routeFeature.geometry?.coordinates || [];
+        if (map.getSource("route")) {
+          map.getSource("route").setData(routeFeature);
+        } else if (coords.length >= 2) {
+          // Route arrived after map loaded with no geometry — swap fallback point for route line
+          if (map.getLayer("trail-point-circle")) map.removeLayer("trail-point-circle");
+          if (map.getSource("trail-point")) map.removeSource("trail-point");
+          map.addSource("route", { type: "geojson", data: routeFeature });
+          map.addLayer({ id: "route-glow", type: "line", source: "route", paint: { "line-color": "#14b8a6", "line-width": 8, "line-opacity": 0.3, "line-blur": 8 } });
+          map.addLayer({ id: "route-line", type: "line", source: "route", paint: { "line-color": "#0f766e", "line-width": 3, "line-opacity": 0.95 } });
+          const bounds = coords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
+          map.fitBounds(bounds, { padding: 80, duration: 900 });
+        }
+      }
+      if (map.getSource("fire") && firePerimeters) map.getSource("fire").setData(firePerimeters);
+      if (map.getSource("snow") && snowGeojson) map.getSource("snow").setData(snowGeojson);
+      if (map.getSource("water") && waterGeojson) map.getSource("water").setData(waterGeojson);
+    };
+
+    if (map.isStyleLoaded()) apply(); else map.once("load", apply);
+  }, [routeFeature, firePerimeters, snowGeojson, waterGeojson]);
 
   // Draggable camp markers
+  const onCampPositionsChangeRef = useRef(onCampPositionsChange);
+  useEffect(() => { onCampPositionsChangeRef.current = onCampPositionsChange; }, [onCampPositionsChange]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !itineraryDays?.length || !routePoints?.length) return;
     campMarkersRef.current.forEach(m => m.remove());
     campMarkersRef.current = [];
     const camps = itineraryDays.slice(0, -1);
-    // Compute actual one-way route length from geometry so mirroring is accurate
     let onewayLen = rawMiles || 0;
     if (tripType === "out-and-back" && routePoints.length > 1) {
       let d = 0;
@@ -753,14 +774,16 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
       onewayLen = d;
     }
     const addMarkers = () => {
+      const positions = {};
       camps.forEach((day) => {
         let targetMile = day.endMile;
-        // For out-and-back, mirror return-leg positions back onto the outbound route
         if (tripType === "out-and-back" && onewayLen > 0 && targetMile > onewayLen) {
           targetMile = 2 * onewayLen - targetMile;
         }
         const pt = getPointAtMile(routePoints, Math.max(0, targetMile));
         if (!pt) return;
+        positions[day.day] = { lat: pt.lat, lng: pt.lng };
+
         const el = document.createElement("div");
         el.style.cssText = "width:26px;height:26px;background:#10b981;border:2.5px solid #065f46;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:white;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.3);user-select:none;";
         el.textContent = day.day;
@@ -770,8 +793,14 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         const marker = new mapboxgl.Marker({ element: el, draggable: true }).setLngLat([pt.lng, pt.lat]).setPopup(popup).addTo(map);
         el.addEventListener("mouseenter", () => marker.togglePopup());
         el.addEventListener("mouseleave", () => { if (marker.getPopup().isOpen()) marker.togglePopup(); });
+        marker.on("dragend", () => {
+          const ll = marker.getLngLat();
+          positions[day.day] = { lat: ll.lat, lng: ll.lng };
+          if (onCampPositionsChangeRef.current) onCampPositionsChangeRef.current({ ...positions });
+        });
         campMarkersRef.current.push(marker);
       });
+      if (onCampPositionsChangeRef.current) onCampPositionsChangeRef.current({ ...positions });
     };
     if (map.isStyleLoaded()) addMarkers(); else map.once("load", addMarkers);
     return () => { campMarkersRef.current.forEach(m => m.remove()); campMarkersRef.current = []; map.off("load", addMarkers); };
@@ -917,7 +946,10 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   );
 }
 
-function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, isDark }) {
+function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, campPositions, onCampPositionsChange, isDark }) {
+  const [aiReport, setAiReport] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+
   const route = planResult?.route;
   const mapLayers = planResult?.map_layers;
   const checks = planResult?.checks;
@@ -927,18 +959,67 @@ function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, tri
   const waterGeojson = checks?.water?.geojson || null;
   const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
 
-  // Build route feature; for out-and-back with dense GPS data, append reversed coords
   let routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
   if (tripType === "out-and-back" && routeFeature?.geometry?.coordinates?.length >= 10) {
     const fwd = routeFeature.geometry.coordinates;
     routeFeature = { ...routeFeature, geometry: { type: "LineString", coordinates: [...fwd, ...[...fwd].reverse().slice(1)] } };
   }
+
   const daytimePeriods = getDaytimePeriods(checks?.weather?.forecast);
   const risk = planResult?.risk || computeRisk(checks || {});
+  const riskColor = risk.status === "no-go"
+    ? { bg: "bg-red-50 border-red-200", text: "text-red-700", badge: "bg-red-600", label: "No-Go" }
+    : risk.status === "caution"
+    ? { bg: "bg-amber-50 border-amber-200", text: "text-amber-700", badge: "bg-amber-500", label: "Caution" }
+    : { bg: "bg-emerald-50 border-emerald-200", text: "text-emerald-700", badge: "bg-emerald-600", label: "Good to Go" };
 
-  const riskColor = risk.status === "no-go" ? { bg: "bg-red-50 border-red-200", text: "text-red-700", label: "No-Go" }
-    : risk.status === "caution" ? { bg: "bg-amber-50 border-amber-200", text: "text-amber-700", label: "Caution" }
-    : { bg: "bg-emerald-50 border-emerald-200", text: "text-emerald-700", label: "Good to Go" };
+  const totalMiles = rawMiles > 0
+    ? (tripType === "out-and-back" ? rawMiles * 2 : rawMiles)
+    : parseFloat(route?.length_miles || selectedTrail?.length_miles || 0);
+
+  // Build day date labels from startDate
+  const dayDates = itineraryDays?.map((_, i) => {
+    if (!startDate) return null;
+    const d = new Date(startDate + "T12:00:00");
+    d.setDate(d.getDate() + i);
+    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  }) || [];
+
+  // Nearby fires (within 5mi, past year) for display
+  const nearbyFires = (checks?.fire?.perimeters?.features || []).filter(f => {
+    const d = f.properties?.distance_from_midpoint_mi;
+    const days = f.properties?.days_since_update;
+    return (d == null || d <= 5) && (days == null || days <= 365);
+  });
+
+  // Water sources from OSM, closest 5
+  const osmWater = checks?.water?.geojson?.features?.slice(0, 5) || [];
+
+  const fetchAiReport = async () => {
+    if (!checks) return;
+    setAiLoading(true);
+    setAiReport(null);
+    try {
+      const res = await fetch("/api/plan/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trail_name: selectedTrail?.name || "Custom route",
+          area: selectedTrail?.area || "",
+          total_miles: totalMiles,
+          trip_type: tripType,
+          num_days: itineraryDays?.length || 1,
+          days: itineraryDays || [],
+          checks,
+        }),
+      });
+      const data = await res.json();
+      setAiReport(data);
+    } catch { setAiReport({ error: "Could not reach AI" }); }
+    setAiLoading(false);
+  };
+
+  const ai = aiReport?.sections;
 
   return (
     <div>
@@ -961,39 +1042,121 @@ function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, tri
         onAddWaterSpot={onAddWaterSpot}
         addWaterMode={addWaterMode}
         setAddWaterMode={setAddWaterMode}
+        onCampPositionsChange={onCampPositionsChange}
         heightClass="h-[58vh]"
       />
 
       <div className="bg-[#f6f3ee] border-t border-slate-200">
-        <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10">
+        <div className="mx-auto max-w-5xl px-6 py-10 sm:px-8 space-y-10">
 
-          {/* Trip status */}
-          <div className={`rounded-2xl border p-5 ${riskColor.bg}`}>
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Trip status</p>
-            <p className={`mt-1 text-2xl font-bold ${riskColor.text}`}>{riskColor.label}</p>
+          {/* ── Header row ── */}
+          <div className="flex items-start justify-between gap-6 flex-wrap">
+            <div>
+              <p className="text-xs uppercase tracking-[0.4em] text-slate-400">Trip Report</p>
+              <h2 className="mt-1 text-3xl font-semibold text-slate-900">{selectedTrail?.name || "Custom Route"}</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {selectedTrail?.area && <>{selectedTrail.area} · </>}
+                {totalMiles > 0 && <>{totalMiles.toFixed(1)} mi · </>}
+                {itineraryDays?.length || 0} days
+                {startDate && <> · starts {startDate}</>}
+              </p>
+            </div>
+            <span className={`rounded-full px-5 py-2 text-sm font-bold text-white ${riskColor.badge}`}>{riskColor.label}</span>
+          </div>
+
+          {/* ── AI overview (template placeholder + AI fill) ── */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Overview</p>
+              <button onClick={fetchAiReport} disabled={aiLoading || !checks}
+                className="rounded-full border border-emerald-300 px-4 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition disabled:opacity-40">
+                {aiLoading ? "Generating…" : aiReport ? "Regenerate AI" : "Generate AI Report"}
+              </button>
+            </div>
+            {aiLoading && <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner />Asking AI for a trip overview…</div>}
+            {ai?.overview ? (
+              <p className="text-sm text-slate-700 leading-relaxed">{ai.overview}</p>
+            ) : !aiLoading && (
+              <p className="text-sm text-slate-400 italic">Hit "Generate AI Report" for a narrative overview of this trip.</p>
+            )}
             {risk.reasons?.length > 0 && (
-              <ul className="mt-3 space-y-1">
-                {risk.reasons.map((r, i) => <li key={i} className="text-sm text-slate-700 flex gap-2"><span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-current inline-block" />{r}</li>)}
+              <ul className="mt-4 space-y-1 pt-4 border-t border-slate-100">
+                {risk.reasons.map((r, i) => (
+                  <li key={i} className={`text-xs flex gap-2 ${riskColor.text}`}>
+                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current inline-block" />{r}
+                  </li>
+                ))}
               </ul>
             )}
           </div>
 
-          {/* Per-day forecast */}
+          {/* ── Conditions grid ── */}
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-500 mb-4">Conditions</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
+              {[
+                {
+                  label: "Weather",
+                  value: checks?.weather?.forecast?.[0]?.short || "—",
+                  sub: checks?.weather?.forecast?.[0]?.temp != null ? `${checks.weather.forecast[0].temp}${checks.weather.forecast[0].temp_unit} · ${checks.weather.forecast[0].wind}` : "",
+                  warn: /thunder|severe|shower|rain/i.test(checks?.weather?.forecast?.[0]?.short || ""),
+                },
+                {
+                  label: "AQI",
+                  value: checks?.aqi?.observations?.[0]?.aqi ?? "—",
+                  sub: checks?.aqi?.observations?.[0]?.category || "",
+                  warn: (checks?.aqi?.observations?.[0]?.aqi || 0) >= 100,
+                },
+                {
+                  label: "Snow",
+                  value: checks?.snow?.max_depth_in != null ? `${checks.snow.max_depth_in} in` : "—",
+                  sub: "at highest point",
+                  warn: (checks?.snow?.max_depth_in || 0) >= 6,
+                },
+                {
+                  label: "Fire (nearby)",
+                  value: nearbyFires.length || "0",
+                  sub: nearbyFires.length ? `within 5 mi, past year` : "none within 5 mi",
+                  warn: nearbyFires.length > 0,
+                },
+              ].map(c => (
+                <div key={c.label} className={`rounded-xl p-4 ${c.warn ? "bg-amber-50 border border-amber-200" : "bg-white border border-slate-100"} shadow-sm`}>
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">{c.label}</p>
+                  <p className={`mt-1 text-xl font-bold ${c.warn ? "text-amber-800" : "text-slate-900"}`}>{c.value}</p>
+                  <p className="mt-0.5 text-xs text-slate-500 truncate">{c.sub}</p>
+                </div>
+              ))}
+            </div>
+            {/* AI conditions narrative */}
+            {ai?.conditions && (
+              <div className="rounded-xl bg-slate-50 border border-slate-200 px-5 py-3">
+                <p className="text-xs text-slate-500 leading-relaxed">{ai.conditions}</p>
+              </div>
+            )}
+          </div>
+
+          {/* ── Day-by-day ── */}
           {itineraryDays?.length > 0 && (
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-500 mb-5">Day-by-day forecast</p>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500 mb-4">Day by Day</p>
+              <div className="space-y-4">
                 {itineraryDays.map((day, i) => {
                   const period = daytimePeriods[i];
                   const wText = (period?.short || "").toLowerCase();
                   const isWarn = /thunder|severe/.test(wText);
                   const isCaution = /shower|rain|drizzle|snow/.test(wText);
+                  const camp = campPositions?.[day.day];
+                  const aiDay = ai?.days?.[i];
                   return (
-                    <div key={day.day} className="rounded-2xl bg-white p-5 shadow-sm">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Day {day.day}</p>
-                          <p className="mt-0.5 text-xs text-slate-400">{period?.name || "—"}</p>
+                    <div key={day.day} className="rounded-2xl bg-white border border-slate-100 shadow-sm overflow-hidden">
+                      {/* Day header */}
+                      <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50">
+                        <div className="flex items-center gap-3">
+                          <span className="h-7 w-7 rounded-full bg-emerald-600 text-white text-xs font-bold flex items-center justify-center">{day.day}</span>
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{dayDates[i] || `Day ${day.day}`}</p>
+                            <p className="text-xs text-slate-400">Mile {day.startMile} → {day.endMile} · {day.miles} mi</p>
+                          </div>
                         </div>
                         {(isWarn || isCaution) && (
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${isWarn ? "bg-amber-100 text-amber-700" : "bg-yellow-100 text-yellow-700"}`}>
@@ -1001,10 +1164,37 @@ function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, tri
                           </span>
                         )}
                       </div>
-                      <p className="mt-3 font-semibold text-slate-900 text-sm">{period?.short || "No forecast available"}</p>
-                      {period && <p className="mt-1 text-xs text-slate-500">{period.temp}{period.temp_unit} · {period.wind}</p>}
-                      <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-400">
-                        Mile {day.startMile} → {day.endMile} · {day.miles} mi
+
+                      <div className="px-5 py-4 space-y-3">
+                        {/* Weather for this day — from NWS */}
+                        {period && (
+                          <div className="flex items-start gap-3">
+                            <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400 mt-0.5 w-16 shrink-0">Weather</span>
+                            <p className="text-sm text-slate-700">{period.short} · {period.temp}{period.temp_unit} · {period.wind}</p>
+                          </div>
+                        )}
+
+                        {/* Camp location — from dragged marker */}
+                        {day.day < (itineraryDays?.length || 0) && (
+                          <div className="flex items-start gap-3">
+                            <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400 mt-0.5 w-16 shrink-0">Camp</span>
+                            <p className="text-sm text-slate-700">
+                              {camp
+                                ? `${camp.lat.toFixed(4)}°N, ${Math.abs(camp.lng).toFixed(4)}°W`
+                                : "Drag marker on map to set"}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* AI day narrative */}
+                        {aiDay ? (
+                          <div className="flex items-start gap-3">
+                            <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400 mt-0.5 w-16 shrink-0">Notes</span>
+                            <p className="text-sm text-slate-600 leading-relaxed italic">{aiDay}</p>
+                          </div>
+                        ) : aiLoading ? (
+                          <div className="flex items-center gap-2 text-xs text-slate-400"><Spinner size={3} />Generating…</div>
+                        ) : null}
                       </div>
                     </div>
                   );
@@ -1013,24 +1203,26 @@ function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, tri
             </div>
           )}
 
-          {/* Conditions summary */}
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-500 mb-5">Conditions summary</p>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {[
-                { label: "Fire areas", value: String(checks?.fire?.perimeters?.features?.length || 0), sub: "in region", warn: (checks?.fire?.perimeters?.features?.length || 0) > 0 },
-                { label: "Snow depth", value: `${checks?.snow?.max_depth_in ?? "--"} in`, sub: "at highest point", warn: (checks?.snow?.max_depth_in || 0) > 0 },
-                { label: "AQI", value: String(checks?.aqi?.observations?.[0]?.aqi ?? "--"), sub: checks?.aqi?.observations?.[0]?.category || "", warn: (checks?.aqi?.observations?.[0]?.aqi || 0) >= 100 },
-                { label: "Water sources", value: String(checks?.water?.count ?? "--"), sub: checks?.water?.nearest_mi != null ? `nearest ${checks.water.nearest_mi} mi` : "", warn: (checks?.water?.count ?? 1) === 0 },
-              ].map(c => (
-                <div key={c.label} className={`rounded-2xl p-5 shadow-sm ${c.warn ? "bg-amber-50" : "bg-white"}`}>
-                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">{c.label}</p>
-                  <p className={`mt-1 text-2xl font-bold ${c.warn ? "text-amber-800" : "text-slate-900"}`}>{c.value}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">{c.sub}</p>
-                </div>
-              ))}
+          {/* ── Water sources ── */}
+          {(osmWater.length > 0 || userWaterSpots?.length > 0) && (
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500 mb-4">Water Sources</p>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {osmWater.map((f, i) => (
+                  <div key={i} className="rounded-xl bg-white border border-cyan-100 p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-cyan-800">{f.properties?.name || f.properties?.water_type}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{f.properties?.water_type} · {f.properties?.distance_mi} mi from trail</p>
+                  </div>
+                ))}
+                {(userWaterSpots || []).map((s, i) => (
+                  <div key={`u${i}`} className="rounded-xl bg-cyan-50 border border-cyan-200 p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-cyan-800">{s.name || "User-added"}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{s.lat.toFixed(4)}°N, {Math.abs(s.lng).toFixed(4)}°W · User placed</p>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
         </div>
       </div>
@@ -1267,6 +1459,7 @@ export function PlanView({ onBack, isDark }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [userWaterSpots, setUserWaterSpots] = useState([]);
   const [addWaterMode, setAddWaterMode] = useState(false);
+  const [campPositions, setCampPositions] = useState({});
   const fileInputRef = useRef(null);
 
   // Derived values
@@ -1460,6 +1653,7 @@ export function PlanView({ onBack, isDark }) {
         <ReportStep
           planResult={planResult}
           selectedTrail={selectedTrail}
+          startDate={startDate}
           itineraryDays={itineraryDays}
           routePoints={routePoints}
           tripType={tripType}
@@ -1468,6 +1662,8 @@ export function PlanView({ onBack, isDark }) {
           onAddWaterSpot={(spot) => setUserWaterSpots(prev => [...prev, spot])}
           addWaterMode={addWaterMode}
           setAddWaterMode={setAddWaterMode}
+          campPositions={campPositions}
+          onCampPositionsChange={setCampPositions}
           isDark={isDark}
         />
         ) : (
