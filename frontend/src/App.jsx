@@ -2,429 +2,25 @@ import { useState, useRef, useEffect } from "react";
 import mapboxgl from "mapbox-gl";
 import "./index.css";
 
-const steps = [
-  { id: "upload", title: "Upload GPX Route", subtitle: "Your trip starts with a route. We'll handle the rest." },
-  { id: "dates", title: "Set the Trip Window", subtitle: "Forecasts are accurate within the next 10 days." },
-  { id: "match", title: "Confirm Trail Match", subtitle: "We match your GPX to the closest trail data in Northern CA." },
-  { id: "checks", title: "Pre-Trip Checks", subtitle: "Weather, air quality, fire perimeters, and snow conditions." },
-  { id: "report", title: "Trip Readiness Report", subtitle: "Bullet summary and map overview." },
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PLAN_STEPS = [
+  { id: "upload",    label: "Route" },
+  { id: "dates",     label: "Dates" },
+  { id: "match",     label: "Match" },
+  { id: "itinerary", label: "Itinerary" },
+  { id: "checks",    label: "Checks" },
+  { id: "report",    label: "Report" },
 ];
 
-const toneTags = ["Forecast window ≤ 10 days", "Northern CA only", "GPX required", "Bullet report"];
+// ─── Utilities ────────────────────────────────────────────────────────────────
 
 function classNames(...classes) {
   return classes.filter(Boolean).join(" ");
 }
 
-function ChatPanel({ messages, onUserMessage }) {
-  const scrollRef = useRef(null);
-  const [input, setInput] = useState("");
-  
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
-  
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (input.trim() && onUserMessage) {
-      onUserMessage(input.trim());
-      setInput("");
-    }
-  };
-  
-  return (
-    <aside className="relative flex h-screen flex-col overflow-hidden bg-[#0f1a15] text-white">
-      <div className="pointer-events-none absolute inset-0 opacity-40">
-        <div className="absolute -left-24 top-12 h-64 w-64 rounded-full bg-emerald-500/20 blur-3xl" />
-        <div className="absolute -bottom-20 right-0 h-72 w-72 rounded-full bg-teal-400/20 blur-3xl" />
-      </div>
-      <div className="relative z-10 px-8 py-8">
-        <p className="text-xs uppercase tracking-[0.5em] text-emerald-300">Trip Planner</p>
-        <h1 className="mt-4 text-3xl font-semibold leading-tight">Backcountry Readiness</h1>
-        <p className="mt-3 text-sm text-white/70">A multi-step preflight assistant for trail trips in the next 10 days.</p>
-        <div className="mt-6 flex flex-wrap gap-2">
-          {toneTags.map((tag) => (
-            <span key={tag} className="rounded-full border border-emerald-300/30 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.2em]">
-              {tag}
-            </span>
-          ))}
-        </div>
-      </div>
-      <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto px-8 pb-4">
-        <div className="space-y-4">
-          {messages.map((msg, idx) => (
-            <div key={`${msg.role}-${idx}`} className={classNames(
-              "max-w-[85%] rounded-2xl p-4 text-sm leading-relaxed shadow-lg shadow-black/5",
-              msg.role === "user" ? "ml-auto bg-emerald-600/20 text-emerald-50" : msg.role === "system" ? "bg-white/10 text-emerald-100" : "bg-white/5"
-            )}>
-              <p className="mb-2 text-[11px] uppercase tracking-[0.3em] text-white/60">{msg.role === "system" ? "System" : msg.role === "user" ? "You" : "Advisor"}</p>
-              <p>{msg.text}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-      <form onSubmit={handleSubmit} className="relative z-10 border-t border-white/10 px-4 py-3">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about trails, weather..."
-            className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white placeholder-white/40 focus:border-emerald-500 focus:outline-none"
-          />
-          <button type="submit" className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
-            Send
-          </button>
-        </div>
-      </form>
-    </aside>
-  );
-}
-
-function StepHeader({ step, stepIndex }) {
-  return (
-    <div>
-      <p className="text-xs uppercase tracking-[0.35em] text-emerald-700">Step {stepIndex + 1} of {steps.length}</p>
-      <h2 className="mt-3 text-4xl font-semibold text-slate-900">{step.title}</h2>
-      <p className="mt-3 max-w-2xl text-sm text-slate-600">{step.subtitle}</p>
-    </div>
-  );
-}
-
-function Stepper({ activeStep, onSelect }) {
-  return (
-    <div className="flex items-center gap-2 text-xs uppercase tracking-[0.3em]">
-      {steps.map((step, idx) => (
-        <button key={step.id} type="button" onClick={() => onSelect(step.id)} className={classNames("flex h-10 w-10 items-center justify-center rounded-full border text-[11px] font-semibold", activeStep === step.id ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500 hover:border-emerald-300")}>
-          {idx + 1}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputMode, setInputMode, trailName, setTrailName, onNameSearch, onModeChange, onSuggestionSelect }) {
-  const isGpxMode = inputMode === "gpx";
-  const [suggestions, setSuggestions] = useState([]);
-  const [suggestLoading, setSuggestLoading] = useState(false);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState(-1);
-  const debounceRef = useRef(null);
-  const dropdownRef = useRef(null);
-
-  const handleModeChange = (mode) => {
-    setInputMode(mode);
-    setSuggestions([]);
-    setShowDropdown(false);
-    if (onModeChange) onModeChange(mode);
-  };
-
-  // Debounced fetch of suggestions as user types
-  const handleNameInput = (e) => {
-    const val = e.target.value;
-    setTrailName(val);
-    setActiveSuggestionIdx(-1);
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    if (!val.trim() || val.trim().length < 2) {
-      setSuggestions([]);
-      setShowDropdown(false);
-      return;
-    }
-
-    debounceRef.current = setTimeout(async () => {
-      setSuggestLoading(true);
-      try {
-        const res = await fetch(`/api/trail/suggest?q=${encodeURIComponent(val.trim())}`);
-        const data = await res.json();
-        setSuggestions(Array.isArray(data) ? data : []);
-        setShowDropdown(Array.isArray(data) && data.length > 0);
-      } catch {
-        setSuggestions([]);
-        setShowDropdown(false);
-      } finally {
-        setSuggestLoading(false);
-      }
-    }, 300);
-  };
-
-  const handleSuggestionClick = (trail) => {
-    setSuggestions([]);
-    setShowDropdown(false);
-    setActiveSuggestionIdx(-1);
-    if (onSuggestionSelect) onSuggestionSelect(trail);
-  };
-
-  // Keyboard navigation in the dropdown
-  const handleKeyDown = (e) => {
-    if (!showDropdown || suggestions.length === 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActiveSuggestionIdx((prev) => Math.min(prev + 1, suggestions.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveSuggestionIdx((prev) => Math.max(prev - 1, -1));
-    } else if (e.key === "Enter" && activeSuggestionIdx >= 0) {
-      e.preventDefault();
-      handleSuggestionClick(suggestions[activeSuggestionIdx]);
-    } else if (e.key === "Escape") {
-      setShowDropdown(false);
-    }
-  };
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  return (
-    <div className="space-y-8">
-      <div className="flex gap-4 p-1 bg-slate-100 rounded-xl w-fit">
-        <button onClick={() => handleModeChange("gpx")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${isGpxMode ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>
-          Upload GPX
-        </button>
-        <button onClick={() => handleModeChange("name")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${!isGpxMode ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>
-          Name + Region
-        </button>
-      </div>
-
-      <div className="rounded-[32px] border border-emerald-100 bg-gradient-to-br from-white via-white to-emerald-50/40 p-10 shadow-lg shadow-emerald-200/30">
-        {isGpxMode ? (
-          <>
-            <div className="flex items-start justify-between gap-6">
-              <div>
-                <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">GPX Upload</p>
-                <h3 className="mt-3 text-2xl font-semibold text-slate-900">Drop your GPX file here</h3>
-                <p className="mt-2 text-sm text-slate-600">We&apos;ll compute distance, elevation gain, and key coordinates along your route.</p>
-              </div>
-              <div className="rounded-2xl bg-emerald-900/5 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-700">Secure ingest</div>
-            </div>
-            <div className="mt-8 rounded-3xl border border-dashed border-emerald-300 bg-white/80 px-6 py-10 text-center">
-              <input ref={fileInputRef} type="file" accept=".gpx" onChange={onFileChange} className="hidden" id="gpx-upload" />
-              <label htmlFor="gpx-upload" className="cursor-pointer block text-sm text-slate-500 mb-4">
-                {selectedFile ? selectedFile.name : "Drag & drop GPX or click to upload"}
-              </label>
-              <button onClick={onUpload} disabled={!selectedFile} className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
-                Parse Route
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-start justify-between gap-6">
-              <div>
-                <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">Trail Search</p>
-                <h3 className="mt-3 text-2xl font-semibold text-slate-900">Search by name</h3>
-                <p className="mt-2 text-sm text-slate-600">Start typing to see matching trails, or hit Search to browse all results.</p>
-              </div>
-            </div>
-            <div className="mt-8 space-y-4">
-              {/* Input + suggestions wrapper */}
-              <div className="relative" ref={dropdownRef}>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={trailName}
-                    onChange={handleNameInput}
-                    onKeyDown={handleKeyDown}
-                    onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
-                    placeholder="e.g., Aloha Lake, Desolation Wilderness"
-                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm pr-10 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-                    autoComplete="off"
-                  />
-                  {suggestLoading && (
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2">
-                      <svg className="h-4 w-4 animate-spin text-emerald-500" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                      </svg>
-                    </span>
-                  )}
-                </div>
-
-                {/* Suggestions dropdown */}
-                {showDropdown && suggestions.length > 0 && (
-                  <ul className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60">
-                    {suggestions.map((trail, idx) => (
-                      <li
-                        key={trail.id}
-                        onMouseDown={(e) => { e.preventDefault(); handleSuggestionClick(trail); }}
-                        onMouseEnter={() => setActiveSuggestionIdx(idx)}
-                        className={`flex cursor-pointer items-start gap-3 px-4 py-3 transition ${idx === activeSuggestionIdx ? "bg-emerald-50" : "hover:bg-slate-50"} ${idx < suggestions.length - 1 ? "border-b border-slate-100" : ""}`}
-                      >
-                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-700">
-                          {idx + 1}
-                        </span>
-                        <span className="flex-1 min-w-0">
-                          <span className="block truncate text-sm font-semibold text-slate-900">{trail.name}</span>
-                          <span className="block truncate text-xs text-slate-500">
-                            {trail.area}{trail.length_miles ? ` · ${trail.length_miles} mi` : ""}
-                          </span>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              <button onClick={onNameSearch} disabled={!trailName.trim()} className="w-full rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
-                Search Trails
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DatesStep({ startDate, endDate, onStartDateChange, onEndDateChange, onNext }) {
-  const isValid = startDate && endDate && new Date(startDate) <= new Date(endDate);
-  return (
-    <div className="space-y-8">
-      <div className="grid grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
-          <label className="text-xs uppercase tracking-[0.2em] text-slate-500">Start date</label>
-          <input type="date" className="mt-4 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm" value={startDate} onChange={(e) => onStartDateChange(e.target.value)} />
-        </div>
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
-          <label className="text-xs uppercase tracking-[0.2em] text-slate-500">End date</label>
-          <input type="date" className="mt-4 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm" value={endDate} onChange={(e) => onEndDateChange(e.target.value)} />
-        </div>
-      </div>
-      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 text-sm text-emerald-800">Trips must begin within 10 days to ensure the most accurate NOAA forecasts.</div>
-      <button onClick={onNext} disabled={!isValid} className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
-        Continue to trail match
-      </button>
-    </div>
-  );
-}
-
-function MatchStep({ route, trailMatch, selectedTrailId, onTrailSelect, onNext, loading }) {
-  const autoSelected = trailMatch?.auto_selected;
-  const shortlist = trailMatch?.shortlist || [];
-  const hasRoute = !!route && (route.points?.length || route.midpoint);
-  
-  return (
-    <div className="space-y-8">
-      {autoSelected && (
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
-          <p className="text-sm text-slate-600">We think your GPX matches:</p>
-          <h3 className="mt-3 text-2xl font-semibold text-slate-900">{autoSelected.name}</h3>
-          <p className="mt-2 text-slate-500">{autoSelected.area} · {autoSelected.distance_mi} mi</p>
-          <div className="mt-5 flex flex-wrap gap-3">
-            <button onClick={() => { onTrailSelect(autoSelected.id); onNext(); }} className="rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white">Yes, that&apos;s it</button>
-          </div>
-        </div>
-      )}
-      {shortlist.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-3">
-          {shortlist.map((trail) => (
-            <div key={trail.id} onClick={() => onTrailSelect(trail.id)} className={`cursor-pointer rounded-2xl border p-5 transition ${selectedTrailId === trail.id ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white hover:border-emerald-300"}`}>
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Candidate</p>
-              <h4 className="mt-3 text-lg font-semibold text-slate-900">{trail.name}</h4>
-              <p className="text-slate-500">{trail.area} · {trail.distance_mi} mi</p>
-            </div>
-          ))}
-        </div>
-      )}
-      {!autoSelected && shortlist.length === 0 && !loading && hasRoute && (
-        <div className="rounded-2xl bg-white p-6 shadow-sm text-center py-12">
-          <p className="text-slate-500">No matching trails found. Continuing without trail match.</p>
-        </div>
-      )}
-      <button onClick={onNext} className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700">
-        {loading ? "Running checks..." : "Run pre-trip checks"}
-      </button>
-    </div>
-  );
-}
-
-function Spinner() {
-  return (
-    <svg className="h-4 w-4 animate-spin text-slate-400" viewBox="0 0 24 24" fill="none">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-    </svg>
-  );
-}
-
-function ChecksStep({ checks, checksLoading, onNext }) {
-  const anyLoading = checksLoading && Object.values(checksLoading).some(Boolean);
-
-  const checkItems = [
-    { key: "weather", label: "Weather" },
-    { key: "aqi",     label: "AQI" },
-    { key: "fire",    label: "Fire" },
-    { key: "snow",    label: "Snow" },
-  ];
-
-  const getSummary = (label, data) => {
-    if (!data) return null;
-    if (data.error) return data.error;
-    if (label === "Weather" && data.forecast?.length) {
-      const next = data.forecast[0];
-      return `${next.short} · ${next.temp} ${next.temp_unit} · ${next.wind}`;
-    }
-    if (label === "AQI" && data.observations?.length) {
-      const obs = data.observations[0];
-      return `${obs.parameter} AQI ${obs.aqi} (${obs.category})`;
-    }
-    if (label === "Fire" && data.perimeters?.features) {
-      return `${data.perimeters.features.length} fire perimeters loaded`;
-    }
-    if (label === "Snow" && data.provider === "Open-Meteo") {
-      return `${data.message} Max depth: ${data.max_depth_in ?? "--"} in · Max snowfall: ${data.max_snowfall_in ?? "--"} in`;
-    }
-    if (label === "Snow" && data.message) return data.message;
-    return null;
-  };
-
-  return (
-    <div className="space-y-8">
-      <div className="grid gap-4 md:grid-cols-2">
-        {checkItems.map(({ key, label }) => {
-          const isLoading = checksLoading?.[key];
-          const data = checks?.[key];
-          const summary = getSummary(label, data);
-          const status = isLoading ? null : (data?.error ? "Attention" : data ? "Good" : null);
-          const statusClass = status === "Good" ? "bg-emerald-50 text-emerald-700" : status === "Attention" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700";
-
-          return (
-            <div key={key} className="rounded-2xl bg-white p-6 shadow-sm transition-all">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold text-slate-900">{label}</p>
-                {isLoading ? (
-                  <span className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
-                    <Spinner /> Fetching
-                  </span>
-                ) : status ? (
-                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass}`}>{status}</span>
-                ) : null}
-              </div>
-              <p className="mt-3 text-sm text-slate-600">{isLoading ? "" : (summary ?? "—")}</p>
-            </div>
-          );
-        })}
-      </div>
-      <button onClick={onNext} disabled={anyLoading} className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
-        {anyLoading ? "Running checks…" : "View trip report"}
-      </button>
-    </div>
-  );
-}
-
 function haversineMiles(lat1, lng1, lat2, lng2) {
-  const R = 3958.8; // Earth radius in miles
+  const R = 3958.8;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLng = ((lng2 - lng1) * Math.PI) / 180;
   const a =
@@ -434,390 +30,6 @@ function haversineMiles(lat1, lng1, lat2, lng2) {
       Math.sin(dLng / 2) *
       Math.sin(dLng / 2);
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function ElevationProfile({ route }) {
-  if (!route?.points?.length) return null;
-
-  // Filter to points that have elevation data
-  const pts = route.points.filter((p) => p.ele != null);
-  if (pts.length < 2) return null;
-
-  // Build (distanceMi, elevFt) pairs
-  const data = [];
-  let cumDist = 0;
-  for (let i = 0; i < pts.length; i++) {
-    if (i > 0) {
-      cumDist += haversineMiles(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
-    }
-    data.push({ dist: cumDist, elev: pts[i].ele * 3.28084 });
-  }
-
-  const totalMi = data[data.length - 1].dist;
-  const elevs = data.map((d) => d.elev);
-  const minElev = Math.min(...elevs);
-  const maxElev = Math.max(...elevs);
-  const elevRange = maxElev - minElev || 1;
-
-  // SVG dimensions (logical units)
-  const W = 460;
-  const H = 80;
-  const padL = 4;
-  const padR = 4;
-  const padT = 6;
-  const padB = 4;
-  const chartW = W - padL - padR;
-  const chartH = H - padT - padB;
-
-  const xScale = (dist) => padL + (dist / totalMi) * chartW;
-  const yScale = (elev) => padT + chartH - ((elev - minElev) / elevRange) * chartH;
-
-  // Build SVG path: area fill + line
-  const linePoints = data.map((d) => `${xScale(d.dist).toFixed(1)},${yScale(d.elev).toFixed(1)}`).join(" L ");
-  const areaPath = `M ${xScale(0)},${(padT + chartH).toFixed(1)} L ${linePoints} L ${xScale(totalMi)},${(padT + chartH).toFixed(1)} Z`;
-  const linePath = `M ${linePoints}`;
-
-  const fmtElev = (e) => `${Math.round(e).toLocaleString()} ft`;
-  const fmtDist = (d) => `${d.toFixed(1)} mi`;
-
-  return (
-    <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 w-[500px] rounded-3xl border border-white/30 bg-white/90 p-4 shadow-2xl backdrop-blur">
-      <p className="mb-2 text-[10px] uppercase tracking-[0.35em] text-slate-500">Elevation Profile</p>
-      <div className="relative">
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 80 }} preserveAspectRatio="none">
-          {/* Gradient fill */}
-          <defs>
-            <linearGradient id="elev-grad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0.05" />
-            </linearGradient>
-          </defs>
-          {/* Area fill */}
-          <path d={areaPath} fill="url(#elev-grad)" />
-          {/* Profile line */}
-          <path d={linePath} fill="none" stroke="#059669" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
-        </svg>
-        {/* Y-axis labels — positioned over the SVG */}
-        <span className="absolute left-1 top-0 text-[9px] font-medium leading-none text-slate-500">
-          {fmtElev(maxElev)}
-        </span>
-        <span className="absolute bottom-0 left-1 text-[9px] font-medium leading-none text-slate-500">
-          {fmtElev(minElev)}
-        </span>
-      </div>
-      {/* X-axis labels */}
-      <div className="mt-0.5 flex justify-between text-[9px] uppercase tracking-[0.2em] text-slate-400">
-        <span>{fmtDist(0)}</span>
-        <span className="text-slate-500 font-medium normal-case tracking-normal text-[9px]">
-          +{Math.round(route.elev_gain_ft ?? 0).toLocaleString()} ft gain
-        </span>
-        <span>{fmtDist(totalMi)}</span>
-      </div>
-    </div>
-  );
-}
-
-function toLineFeature(layer) {
-  if (!layer) return null;
-  if (layer.type === "Feature" && layer.geometry?.type === "LineString") return layer;
-  if (layer.type === "LineString") {
-    return { type: "Feature", geometry: layer, properties: {} };
-  }
-  return null;
-}
-
-function routeToFeature(routeData) {
-  const coords = routeData?.points?.map((p) => [p.lng, p.lat]).filter((coord) => coord.length === 2) || [];
-  if (coords.length < 2) return null;
-  return { type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: {} };
-}
-
-function getFireCount(firePerimeters) {
-  return firePerimeters?.features?.length || 0;
-}
-
-function ReportStep({ planResult, selectedTrail }) {
-  const report = planResult?.report;
-  const mapLayers = planResult?.map_layers;
-  const route = planResult?.route;
-  const checks = planResult?.checks;
-  const mapContainerRef = useRef(null);
-  const mapRef = useRef(null);
-  const firePerimeters = mapLayers?.fire_perimeters || planResult?.checks?.fire?.perimeters || null;
-  const snowGeojson = checks?.snow?.geojson || null;
-  const routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
-  const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
-  const fireCount = getFireCount(firePerimeters);
-
-  useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!token) return;
-    mapboxgl.accessToken = token;
-
-    const routeCoords = routeFeature?.geometry?.coordinates || [];
-    const center = routeCoords[0] || fallbackCenter || [-120.1287, 38.8649];
-
-    const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: "mapbox://styles/mapbox/outdoors-v12",
-      center,
-      zoom: 9,
-      pitch: 45,
-      bearing: -12,
-    });
-    mapRef.current = map;
-
-    map.on("load", () => {
-      map.addSource("mapbox-dem", {
-        type: "raster-dem",
-        url: "mapbox://mapbox.terrain-rgb",
-        tileSize: 512,
-        maxzoom: 14,
-      });
-      map.setTerrain({ source: "mapbox-dem", exaggeration: 1.2 });
-      map.addLayer({
-        id: "sky",
-        type: "sky",
-        paint: {
-          "sky-type": "atmosphere",
-          "sky-atmosphere-sun": [0.0, 0.0],
-          "sky-atmosphere-sun-intensity": 15,
-        },
-      });
-
-      if (routeCoords.length) {
-        const bounds = routeCoords.reduce((b, coord) => b.extend(coord), new mapboxgl.LngLatBounds(routeCoords[0], routeCoords[0]));
-        map.fitBounds(bounds, { padding: 80, duration: 900 });
-        map.addSource("route", {
-          type: "geojson",
-          data: routeFeature,
-        });
-        map.addLayer({
-          id: "route-glow",
-          type: "line",
-          source: "route",
-          layout: { "line-join": "round", "line-cap": "round" },
-          paint: { "line-color": "#14b8a6", "line-width": 16, "line-opacity": 0.45 },
-        });
-        map.addLayer({
-          id: "route-line",
-          type: "line",
-          source: "route",
-          layout: { "line-join": "round", "line-cap": "round" },
-          paint: { "line-color": "#042f2e", "line-width": 5 },
-        });
-      } else if (fallbackCenter) {
-        map.addSource("trail-point", {
-          type: "geojson",
-          data: {
-            type: "Feature",
-            geometry: { type: "Point", coordinates: fallbackCenter },
-            properties: {},
-          },
-        });
-        map.addLayer({
-          id: "trail-point",
-          type: "circle",
-          source: "trail-point",
-          paint: { "circle-radius": 10, "circle-color": "#0f766e", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2 },
-        });
-      }
-
-      if (firePerimeters) {
-        map.addSource("fire", {
-          type: "geojson",
-          data: firePerimeters,
-        });
-        map.addLayer({
-          id: "fire-fill",
-          type: "fill",
-          source: "fire",
-          paint: { "fill-color": "#f97316", "fill-opacity": 0.28 },
-        });
-        map.addLayer({
-          id: "fire-outline",
-          type: "line",
-          source: "fire",
-          paint: { "line-color": "#c2410c", "line-width": 2 },
-        });
-        map.addLayer({
-          id: "fire-labels",
-          type: "symbol",
-          source: "fire",
-          layout: {
-            "text-field": [
-              "coalesce",
-              ["get", "IncidentName"],
-              ["get", "poly_IncidentName"],
-              ["get", "IRWINID"],
-              "Fire perimeter",
-            ],
-            "text-size": 12,
-            "text-offset": [0, 0],
-            "text-anchor": "center",
-            "text-allow-overlap": false,
-          },
-          paint: {
-            "text-color": "#7c2d12",
-            "text-halo-color": "#fff7ed",
-            "text-halo-width": 1.5,
-          },
-        });
-
-        if (map.getLayer("route-glow")) map.moveLayer("route-glow", "fire-labels");
-        if (map.getLayer("route-line")) map.moveLayer("route-line", "fire-labels");
-
-        map.on("mouseenter", "fire-fill", () => {
-          map.getCanvas().style.cursor = "pointer";
-        });
-        map.on("mouseleave", "fire-fill", () => {
-          map.getCanvas().style.cursor = "";
-        });
-        map.on("click", "fire-fill", (event) => {
-          const feature = event.features?.[0];
-          if (!feature) return;
-          const props = feature.properties || {};
-          const name = props.IncidentName || props.poly_IncidentName || props.IRWINID || "Fire perimeter";
-          const recency = props.recency_tag ? `<div>Update: ${props.recency_tag}</div>` : "";
-          new mapboxgl.Popup()
-            .setLngLat(event.lngLat)
-            .setHTML(`<strong>${name}</strong>${recency}`)
-            .addTo(map);
-        });
-      }
-
-      if (snowGeojson) {
-        map.addSource("snow", { type: "geojson", data: snowGeojson });
-        map.addLayer({
-          id: "snow-point",
-          type: "circle",
-          source: "snow",
-          paint: {
-            "circle-radius": 10,
-            "circle-color": "#bfdbfe",
-            "circle-opacity": 0.85,
-            "circle-stroke-color": "#3b82f6",
-            "circle-stroke-width": 2,
-          },
-        });
-        map.addLayer({
-          id: "snow-label",
-          type: "symbol",
-          source: "snow",
-          layout: {
-            "text-field": ["concat", ["to-string", ["get", "max_depth_in"]], " in snow"],
-            "text-size": 12,
-            "text-offset": [0, 1.8],
-            "text-anchor": "top",
-          },
-          paint: {
-            "text-color": "#1e3a8a",
-            "text-halo-color": "#eff6ff",
-            "text-halo-width": 2,
-          },
-        });
-        if (map.getLayer("route-glow")) map.moveLayer("route-glow", "snow-label");
-        if (map.getLayer("route-line")) map.moveLayer("route-line", "snow-label");
-      }
-    });
-
-    return () => {
-      map.remove();
-      mapRef.current = null;
-    };
-  }, [routeFeature, selectedTrail, firePerimeters, snowGeojson, fallbackCenter]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const routeCoords = routeFeature?.geometry?.coordinates || [];
-    if (map.getSource("route") && routeCoords.length) {
-      map.getSource("route").setData(routeFeature);
-    }
-    if (map.getSource("fire") && firePerimeters) {
-      map.getSource("fire").setData(firePerimeters);
-    }
-    if (map.getSource("snow") && snowGeojson) {
-      map.getSource("snow").setData(snowGeojson);
-    }
-  }, [routeFeature, firePerimeters, snowGeojson]);
-  
-  return (
-    <div className="relative h-[calc(100vh-9.25rem)] min-h-[42rem] overflow-hidden bg-slate-900">
-      {(mapLayers || selectedTrail) && import.meta.env.VITE_MAPBOX_TOKEN ? (
-        <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-100 text-slate-400">
-          {mapLayers || selectedTrail ? "Mapbox token missing" : "Mapbox canvas placeholder"}
-        </div>
-      )}
-
-      <div className="pointer-events-none absolute left-6 top-6 max-w-md rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
-        <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Route Overview</p>
-        <h3 className="mt-2 text-2xl font-semibold text-slate-950">3D trip map</h3>
-        <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-          <div className="rounded-2xl bg-emerald-50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-emerald-700">Route</p>
-            <p className="mt-1 font-semibold text-emerald-950">{routeFeature ? "Loaded" : "Point only"}</p>
-          </div>
-          <div className="rounded-2xl bg-orange-50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-orange-700">Fire</p>
-            <p className="mt-1 font-semibold text-orange-950">{fireCount} areas</p>
-          </div>
-          <div className="rounded-2xl bg-sky-50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-sky-700">Snow</p>
-            <p className="mt-1 font-semibold text-sky-950">{checks?.snow?.max_depth_in ?? "--"} in</p>
-          </div>
-        </div>
-        <p className="mt-3 text-xs text-slate-500">Distance: {route?.distance_mi?.toFixed?.(1) || selectedTrail?.length_miles || "--"} mi</p>
-      </div>
-
-      <div className="pointer-events-none absolute bottom-6 left-6 rounded-2xl border border-white/30 bg-white/90 p-4 text-sm shadow-2xl backdrop-blur">
-        <div className="flex items-center gap-3">
-          <span className="h-1.5 w-10 rounded-full bg-teal-900 shadow-[0_0_0_6px_rgba(20,184,166,0.25)]" />
-          <span className="font-medium text-slate-800">GPX/trail route</span>
-        </div>
-        <div className="mt-3 flex items-center gap-3">
-          <span className="h-4 w-10 rounded bg-orange-500/30 ring-2 ring-orange-700" />
-          <span className="font-medium text-slate-800">Fire perimeter</span>
-        </div>
-        <div className="mt-3 flex items-center gap-3">
-          <span className="h-4 w-4 rounded-full border-2 border-blue-500 bg-blue-200" />
-          <span className="font-medium text-slate-800">Snow depth (highest point)</span>
-        </div>
-      </div>
-
-      {report?.bullets?.length ? (
-        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Briefing</p>
-          <ul className="mt-4 space-y-3 text-sm text-slate-700">
-            {report.bullets.slice(0, 4).map((bullet, idx) => (
-              <li key={idx} className="flex gap-3">
-                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-                <span>{bullet}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : checks ? (
-        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Telemetry</p>
-          <div className="mt-4 space-y-2 text-sm text-slate-700">
-            <p>Weather: {checks.weather?.forecast?.[0]?.short || "Loaded"}</p>
-            <p>AQI: {checks.aqi?.observations?.[0]?.aqi || "Loaded"}</p>
-            <p>Snow: {checks.snow?.message || "Loaded"}</p>
-            {checks.snow?.provider === "Open-Meteo" && (
-              <p>Max snow: {checks.snow.max_depth_in} in depth · {checks.snow.max_snowfall_in} in snowfall</p>
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      <ElevationProfile route={route} />
-    </div>
-  );
 }
 
 function computeRisk(checks) {
@@ -843,137 +55,744 @@ function buildReport(trail, risk) {
   return { format: "bullets", bullets };
 }
 
-export default function App() {
-  const [activeStep, setActiveStep] = useState(steps[0].id);
-  const [messages, setMessages] = useState([
-    { role: "system", text: "Trip readiness planner is online. We'll guide you step by step." },
-    { role: "assistant", text: "Upload your GPX route and I'll extract distance, elevation, and key coordinates." },
-    { role: "assistant", text: "Once we have the route, we'll scan weather, AQI, fire, and snow for the next 10 days." },
-  ]);
-  
-  const [route, setRoute] = useState(null);
-  const [startDate, setStartDate] = useState("2026-04-30");
-  const [endDate, setEndDate] = useState("2026-05-02");
-  const [trailMatch, setTrailMatch] = useState(null);
-  const [selectedTrail, setSelectedTrail] = useState(null);
-  const [selectedTrailId, setSelectedTrailId] = useState(null);
-  const [checks, setChecks] = useState(null);
-  const [planResult, setPlanResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [checksLoading, setChecksLoading] = useState({ weather: false, aqi: false, fire: false, snow: false });
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [inputMode, setInputMode] = useState("gpx");
-  const [trailName, setTrailName] = useState("");
-  const [gpxRoute, setGpxRoute] = useState(null); // route from GPX parsing
-  const [nameSearchResults, setNameSearchResults] = useState([]);
-  const fileInputRef = useRef(null);
-  
-  const stepIndex = steps.findIndex((s) => s.id === activeStep);
-  const step = steps[stepIndex];
-  const progress = Math.max(0, ((stepIndex + 1) / steps.length) * 100);
-  
-  const addMessage = (role, text) => setMessages((prev) => [...prev, { role, text }]);
-  
-  const handleUserMessage = async (text) => {
-    addMessage("user", text);
-    
-    // Simple AI responses based on keywords
-    let response = "I can help you plan your backcountry trip. Upload a GPX file to get started, or ask about weather conditions.";
-    
-    const lower = text.toLowerCase();
-    if (lower.includes("weather") || lower.includes("forecast")) {
-      response = "Weather forecasts are available once you set your trip dates. We'll pull NOAA data for your route location.";
-    } else if (lower.includes("gpx") || lower.includes("upload") || lower.includes("file")) {
-      response = "Click 'Choose File' to upload a GPX route, or drag and drop it into the upload area. The GPX should contain track points with lat/lng coordinates.";
-    } else if (lower.includes("fire") || lower.includes("aqi") || lower.includes("air")) {
-      response = "We'll check active fire perimeters and air quality index when you run pre-trip checks. This requires a GPX route first.";
-    } else if (lower.includes("trail") || lower.includes("match")) {
-      response = "We match your GPX to trails in our Northern CA database. You can confirm the match or select a different candidate.";
-    } else if (lower.includes("hello") || lower.includes("hi") || lower.includes("hey")) {
-      response = "Welcome to Backcountry Readiness! Let's plan your trip. Upload a GPX file to get started.";
+function toLineFeature(layer) {
+  if (!layer) return null;
+  if (layer.type === "Feature" && layer.geometry?.type === "LineString") return layer;
+  if (layer.type === "LineString") return { type: "Feature", geometry: layer, properties: {} };
+  return null;
+}
+
+function routeToFeature(routeData) {
+  const coords = routeData?.points?.map((p) => [p.lng, p.lat]).filter((c) => c.length === 2) || [];
+  if (coords.length < 2) return null;
+  return { type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: {} };
+}
+
+function getFireCount(fp) { return fp?.features?.length || 0; }
+
+// ─── Small shared components ──────────────────────────────────────────────────
+
+function Spinner({ size = 4 }) {
+  return (
+    <svg className={`h-${size} w-${size} animate-spin text-slate-400`} viewBox="0 0 24 24" fill="none">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+    </svg>
+  );
+}
+
+function BackBtn({ label = "← Dashboard", onClick }) {
+  return (
+    <button onClick={onClick} className="text-xs uppercase tracking-[0.3em] text-slate-500 hover:text-emerald-600 transition">
+      {label}
+    </button>
+  );
+}
+
+// ─── Elevation Profile ────────────────────────────────────────────────────────
+
+function ElevationProfile({ route }) {
+  if (!route?.points?.length) return null;
+  const pts = route.points.filter((p) => p.ele != null);
+  if (pts.length < 2) return null;
+
+  const data = [];
+  let cumDist = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (i > 0) cumDist += haversineMiles(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
+    data.push({ dist: cumDist, elev: pts[i].ele * 3.28084 });
+  }
+
+  const totalMi = data[data.length - 1].dist;
+  const elevs = data.map((d) => d.elev);
+  const minElev = Math.min(...elevs);
+  const maxElev = Math.max(...elevs);
+  const elevRange = maxElev - minElev || 1;
+
+  const W = 460; const H = 80;
+  const padL = 4; const padR = 4; const padT = 6; const padB = 4;
+  const chartW = W - padL - padR; const chartH = H - padT - padB;
+
+  const xScale = (d) => padL + (d / totalMi) * chartW;
+  const yScale = (e) => padT + chartH - ((e - minElev) / elevRange) * chartH;
+
+  const linePoints = data.map((d) => `${xScale(d.dist).toFixed(1)},${yScale(d.elev).toFixed(1)}`).join(" L ");
+  const areaPath = `M ${xScale(0)},${(padT + chartH).toFixed(1)} L ${linePoints} L ${xScale(totalMi)},${(padT + chartH).toFixed(1)} Z`;
+
+  return (
+    <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 w-[500px] rounded-3xl border border-white/30 bg-white/90 p-4 shadow-2xl backdrop-blur">
+      <p className="mb-2 text-[10px] uppercase tracking-[0.35em] text-slate-500">Elevation Profile</p>
+      <div className="relative">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 80 }} preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="elev-grad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0.05" />
+            </linearGradient>
+          </defs>
+          <path d={areaPath} fill="url(#elev-grad)" />
+          <path d={`M ${linePoints}`} fill="none" stroke="#059669" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+        <span className="absolute left-1 top-0 text-[9px] font-medium leading-none text-slate-500">{Math.round(maxElev).toLocaleString()} ft</span>
+        <span className="absolute bottom-0 left-1 text-[9px] font-medium leading-none text-slate-500">{Math.round(minElev).toLocaleString()} ft</span>
+      </div>
+      <div className="mt-0.5 flex justify-between text-[9px] uppercase tracking-[0.2em] text-slate-400">
+        <span>0 mi</span>
+        <span className="text-slate-500 font-medium normal-case tracking-normal text-[9px]">+{Math.round(route.elev_gain_ft ?? 0).toLocaleString()} ft gain</span>
+        <span>{totalMi.toFixed(1)} mi</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Trail Search Input (shared between UploadStep and ExploreView) ───────────
+
+function TrailSearchInput({ trailName, setTrailName, onNameSearch, onSuggestionSelect }) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const debounceRef = useRef(null);
+  const dropdownRef = useRef(null);
+
+  const handleInput = (e) => {
+    const val = e.target.value;
+    setTrailName(val);
+    setActiveIdx(-1);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!val.trim() || val.trim().length < 2) { setSuggestions([]); setShowDropdown(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSuggestLoading(true);
+      try {
+        const res = await fetch(`/api/trail/suggest?q=${encodeURIComponent(val.trim())}`);
+        const data = await res.json();
+        setSuggestions(Array.isArray(data) ? data : []);
+        setShowDropdown(Array.isArray(data) && data.length > 0);
+      } catch { setSuggestions([]); setShowDropdown(false); }
+      finally { setSuggestLoading(false); }
+    }, 300);
+  };
+
+  const pick = (trail) => { setSuggestions([]); setShowDropdown(false); setActiveIdx(-1); if (onSuggestionSelect) onSuggestionSelect(trail); };
+
+  const handleKeyDown = (e) => {
+    if (!showDropdown || !suggestions.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((p) => Math.min(p + 1, suggestions.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((p) => Math.max(p - 1, -1)); }
+    else if (e.key === "Enter" && activeIdx >= 0) { e.preventDefault(); pick(suggestions[activeIdx]); }
+    else if (e.key === "Escape") { setShowDropdown(false); }
+  };
+
+  useEffect(() => {
+    const handler = (e) => { if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setShowDropdown(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div className="space-y-3">
+      <div className="relative" ref={dropdownRef}>
+        <div className="relative">
+          <input type="text" value={trailName} onChange={handleInput} onKeyDown={handleKeyDown}
+            onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
+            placeholder="e.g., Aloha Lake, Desolation Wilderness"
+            autoComplete="off"
+            className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm pr-10 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+          />
+          {suggestLoading && <span className="absolute right-3 top-1/2 -translate-y-1/2"><Spinner /></span>}
+        </div>
+        {showDropdown && suggestions.length > 0 && (
+          <ul className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60">
+            {suggestions.map((trail, idx) => (
+              <li key={trail.id} onMouseDown={(e) => { e.preventDefault(); pick(trail); }} onMouseEnter={() => setActiveIdx(idx)}
+                className={`flex cursor-pointer items-start gap-3 px-4 py-3 transition ${idx === activeIdx ? "bg-emerald-50" : "hover:bg-slate-50"} ${idx < suggestions.length - 1 ? "border-b border-slate-100" : ""}`}>
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-700">{idx + 1}</span>
+                <span className="flex-1 min-w-0">
+                  <span className="block truncate text-sm font-semibold text-slate-900">{trail.name}</span>
+                  <span className="block truncate text-xs text-slate-500">{trail.area}{trail.length_miles ? ` · ${trail.length_miles} mi` : ""}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <button onClick={onNameSearch} disabled={!trailName.trim()}
+        className="w-full rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
+        Search Trails
+      </button>
+    </div>
+  );
+}
+
+// ─── Plan mode step components ────────────────────────────────────────────────
+
+function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputMode, setInputMode, trailName, setTrailName, onNameSearch, onSuggestionSelect }) {
+  const isGpx = inputMode === "gpx";
+  return (
+    <div className="space-y-8">
+      <div className="flex gap-4 p-1 bg-slate-100 rounded-xl w-fit">
+        <button onClick={() => setInputMode("gpx")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${isGpx ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>Upload GPX</button>
+        <button onClick={() => setInputMode("name")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${!isGpx ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>Name + Region</button>
+      </div>
+      <div className="rounded-[32px] border border-emerald-100 bg-gradient-to-br from-white via-white to-emerald-50/40 p-10 shadow-lg shadow-emerald-200/30">
+        {isGpx ? (
+          <>
+            <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">GPX Upload</p>
+            <h3 className="mt-3 text-2xl font-semibold text-slate-900">Drop your GPX file here</h3>
+            <p className="mt-2 text-sm text-slate-600">We&apos;ll compute distance, elevation gain, and key coordinates along your route.</p>
+            <div className="mt-8 rounded-3xl border border-dashed border-emerald-300 bg-white/80 px-6 py-10 text-center">
+              <input ref={fileInputRef} type="file" accept=".gpx" onChange={onFileChange} className="hidden" id="gpx-upload" />
+              <label htmlFor="gpx-upload" className="cursor-pointer block text-sm text-slate-500 mb-4">
+                {selectedFile ? selectedFile.name : "Drag & drop GPX or click to upload"}
+              </label>
+              <button onClick={onUpload} disabled={!selectedFile}
+                className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
+                Parse Route
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">Trail Search</p>
+            <h3 className="mt-3 text-2xl font-semibold text-slate-900">Search by name</h3>
+            <p className="mt-2 text-sm text-slate-600">Start typing to see matching trails, or hit Search to browse all results.</p>
+            <div className="mt-8">
+              <TrailSearchInput trailName={trailName} setTrailName={setTrailName} onNameSearch={onNameSearch} onSuggestionSelect={onSuggestionSelect} />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DatesStep({ startDate, endDate, onStartDateChange, onEndDateChange, onNext }) {
+  const isValid = startDate && endDate && new Date(startDate) <= new Date(endDate);
+  return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-2 gap-6">
+        <div className="rounded-2xl bg-white p-6 shadow-sm">
+          <label className="text-xs uppercase tracking-[0.2em] text-slate-500">Start date</label>
+          <input type="date" className="mt-4 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm" value={startDate} onChange={(e) => onStartDateChange(e.target.value)} />
+        </div>
+        <div className="rounded-2xl bg-white p-6 shadow-sm">
+          <label className="text-xs uppercase tracking-[0.2em] text-slate-500">End date</label>
+          <input type="date" className="mt-4 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm" value={endDate} onChange={(e) => onEndDateChange(e.target.value)} />
+        </div>
+      </div>
+      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 text-sm text-emerald-800">Trips must begin within 10 days for the most accurate NOAA forecasts.</div>
+      <button onClick={onNext} disabled={!isValid}
+        className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
+        Continue to trail match
+      </button>
+    </div>
+  );
+}
+
+function MatchStep({ route, trailMatch, selectedTrailId, onTrailSelect, onNext, onUseCustomGpx, hasCustomGpx, loading }) {
+  const autoSelected = trailMatch?.auto_selected;
+  const shortlist = trailMatch?.shortlist || [];
+
+  return (
+    <div className="space-y-8">
+      {autoSelected && (
+        <div className="rounded-2xl bg-white p-6 shadow-sm">
+          <p className="text-sm text-slate-600">Best trail match:</p>
+          <h3 className="mt-3 text-2xl font-semibold text-slate-900">{autoSelected.name}</h3>
+          <p className="mt-2 text-slate-500">{autoSelected.area} · {autoSelected.length_miles} mi</p>
+          <p className="mt-1 text-xs text-slate-400">Confidence: {trailMatch?.confidence}</p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button onClick={() => { onTrailSelect(autoSelected.id); onNext(); }}
+              className="rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white">
+              Yes, use this trail
+            </button>
+          </div>
+        </div>
+      )}
+      {shortlist.length > 1 && (
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500 mb-4">Other candidates</p>
+          <div className="grid gap-4 md:grid-cols-3">
+            {shortlist.filter(t => t.id !== autoSelected?.id).map((trail) => (
+              <div key={trail.id} onClick={() => onTrailSelect(trail.id)}
+                className={`cursor-pointer rounded-2xl border p-5 transition ${selectedTrailId === trail.id ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white hover:border-emerald-300"}`}>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Candidate</p>
+                <h4 className="mt-3 text-lg font-semibold text-slate-900">{trail.name}</h4>
+                <p className="text-slate-500">{trail.area} · {trail.length_miles} mi</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {hasCustomGpx && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <p className="text-sm font-semibold text-slate-900">Custom GPX route</p>
+          <p className="mt-1 text-sm text-slate-500">Skip trail matching and use your exact uploaded GPX file as the route.</p>
+          <button onClick={onUseCustomGpx} className="mt-4 rounded-full border border-slate-300 px-5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">
+            Use this exact GPX
+          </button>
+        </div>
+      )}
+      <button onClick={onNext} disabled={loading}
+        className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
+        {loading ? "Matching…" : "Continue with selected trail"}
+      </button>
+    </div>
+  );
+}
+
+function ItineraryStep({ route, selectedTrail, numDays, setNumDays, tripType, setTripType, onNext }) {
+  const rawMiles = parseFloat(route?.distance_mi || selectedTrail?.length_miles || 0);
+  const effectiveMiles = tripType === "out-and-back" ? rawMiles * 2 : rawMiles;
+  const milesPerDay = numDays > 0 && effectiveMiles > 0 ? effectiveMiles / numDays : 0;
+
+  const days = Array.from({ length: numDays }, (_, i) => ({
+    day: i + 1,
+    startMile: +(i * milesPerDay).toFixed(1),
+    endMile: +((i + 1) * milesPerDay).toFixed(1),
+    miles: +milesPerDay.toFixed(1),
+  }));
+
+  const btnBase = "rounded-full px-5 py-2 text-sm font-semibold transition";
+  const btnActive = "bg-emerald-600 text-white";
+  const btnInactive = "border border-slate-200 text-slate-600 hover:bg-slate-50";
+
+  return (
+    <div className="space-y-8">
+      <div className="rounded-[32px] border border-emerald-100 bg-gradient-to-br from-white via-white to-emerald-50/40 p-8 shadow-lg shadow-emerald-200/30 space-y-7">
+        {/* Route type */}
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500 mb-3">Route type</p>
+          <div className="flex gap-3">
+            <button onClick={() => setTripType("loop")} className={`${btnBase} ${tripType === "loop" ? btnActive : btnInactive}`}>Loop</button>
+            <button onClick={() => setTripType("out-and-back")} className={`${btnBase} ${tripType === "out-and-back" ? btnActive : btnInactive}`}>Out &amp; Back</button>
+          </div>
+          {tripType === "out-and-back" && rawMiles > 0 && (
+            <p className="mt-2 text-xs text-slate-500">{rawMiles.toFixed(1)} mi one way → {(rawMiles * 2).toFixed(1)} mi round trip</p>
+          )}
+        </div>
+
+        {/* Number of days */}
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500 mb-3">Trip length</p>
+          <div className="flex items-center gap-5">
+            <button onClick={() => setNumDays((d) => Math.max(1, d - 1))}
+              className="h-10 w-10 rounded-full border border-slate-200 text-xl font-semibold text-slate-600 hover:bg-slate-50 transition flex items-center justify-center">−</button>
+            <span className="text-3xl font-bold text-slate-900 w-10 text-center">{numDays}</span>
+            <button onClick={() => setNumDays((d) => d + 1)}
+              className="h-10 w-10 rounded-full border border-slate-200 text-xl font-semibold text-slate-600 hover:bg-slate-50 transition flex items-center justify-center">+</button>
+            <span className="text-sm text-slate-500">{numDays === 1 ? "day" : "days"}</span>
+          </div>
+        </div>
+
+        {/* Summary bar */}
+        {effectiveMiles > 0 && milesPerDay > 0 && (
+          <div className="rounded-2xl bg-slate-50 px-5 py-4 flex gap-8 text-sm">
+            <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Total</p><p className="mt-1 font-semibold text-slate-900">{effectiveMiles.toFixed(1)} mi</p></div>
+            <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Per day</p><p className="mt-1 font-semibold text-slate-900">~{milesPerDay.toFixed(1)} mi</p></div>
+            <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Days</p><p className="mt-1 font-semibold text-slate-900">{numDays}</p></div>
+          </div>
+        )}
+      </div>
+
+      {/* Day breakdown */}
+      {days.length > 0 && (
+        <div className="space-y-3">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Daily segments (equidistant)</p>
+          {days.map((day) => (
+            <div key={day.day} className="rounded-2xl bg-white p-5 shadow-sm flex items-center justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Day {day.day}</p>
+                <p className="mt-1 font-semibold text-slate-900">Mile {day.startMile} → {day.endMile}</p>
+                <p className="text-xs text-slate-400 mt-0.5">Camp at mile {day.endMile}</p>
+              </div>
+              <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">{day.miles} mi</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-slate-400">Drag-and-adjust coming soon — manual camp placement will be added in a future update.</p>
+
+      <button onClick={onNext}
+        className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700">
+        Continue to pre-trip checks
+      </button>
+    </div>
+  );
+}
+
+function ChecksStep({ checks, checksLoading, onNext }) {
+  const anyLoading = checksLoading && Object.values(checksLoading).some(Boolean);
+  const items = [
+    { key: "weather", label: "Weather" },
+    { key: "aqi",     label: "AQI" },
+    { key: "fire",    label: "Fire" },
+    { key: "snow",    label: "Snow" },
+    { key: "water",   label: "Water" },
+  ];
+
+  const getSummary = (label, data) => {
+    if (!data) return null;
+    if (data.error) return data.error;
+    if (label === "Weather" && data.forecast?.length) {
+      const n = data.forecast[0];
+      return `${n.short} · ${n.temp} ${n.temp_unit} · ${n.wind}`;
     }
-    
-    setTimeout(() => addMessage("assistant", response), 500);
-  };
-  
-  const goToStep = (stepId) => setActiveStep(stepId);
-  
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
-    if (file) setSelectedFile(file);
-  };
-  
-  const handleModeChange = (mode) => {
-    if (mode === "name") {
-      // Clear GPX state when switching to name search
-      setGpxRoute(null);
+    if (label === "AQI" && data.observations?.length) {
+      const o = data.observations[0];
+      return `${o.parameter} AQI ${o.aqi} (${o.category})`;
     }
+    if (label === "Fire" && data.perimeters?.features) return `${data.perimeters.features.length} fire perimeters loaded`;
+    if (label === "Snow" && data.message) return `${data.message}${data.max_depth_in != null ? ` Max: ${data.max_depth_in} in` : ""}`;
+    if (label === "Water" && data.message) return data.message;
+    return null;
   };
-  
-  const handleUpload = async () => {
-    if (!selectedFile) return;
-    
-    const formData = new FormData();
-    formData.append("file", selectedFile);
-    
-    try {
-      const res = await fetch("/api/route/parse", { method: "POST", body: formData });
-      const data = await res.json();
-      if (data.route) {
-        setRoute(data.route);
-        setGpxRoute(data.route);
-        addMessage("assistant", `Route parsed: ${data.route.distance_mi?.toFixed(1) || "?"} miles, ${data.route.elev_gain_ft?.toLocaleString() || "?"} ft elevation gain.`);
-        goToStep("dates");
+
+  return (
+    <div className="space-y-8">
+      <div className="grid gap-4 md:grid-cols-2">
+        {items.map(({ key, label }) => {
+          const isLoading = checksLoading?.[key];
+          const data = checks?.[key];
+          const summary = getSummary(label, data);
+          const status = isLoading ? null : (data?.error ? "Attention" : data ? "Good" : null);
+          const cls = status === "Good" ? "bg-emerald-50 text-emerald-700" : status === "Attention" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700";
+          return (
+            <div key={key} className="rounded-2xl bg-white p-6 shadow-sm">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-900">{label}</p>
+                {isLoading ? (
+                  <span className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500"><Spinner /> Fetching</span>
+                ) : status ? (
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${cls}`}>{status}</span>
+                ) : null}
+              </div>
+              <p className="mt-3 text-sm text-slate-600">{isLoading ? "" : (summary ?? "—")}</p>
+            </div>
+          );
+        })}
+      </div>
+      <button onClick={onNext} disabled={anyLoading}
+        className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
+        {anyLoading ? "Running checks…" : "View trip report"}
+      </button>
+    </div>
+  );
+}
+
+// ─── Map components ───────────────────────────────────────────────────────────
+
+function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false }) {
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const fireCount = getFireCount(firePerimeters);
+
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) return;
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (!token) return;
+    mapboxgl.accessToken = token;
+
+    const routeCoords = routeFeature?.geometry?.coordinates || [];
+    const center = routeCoords[0] || fallbackCenter || [-120.1287, 38.8649];
+
+    const map = new mapboxgl.Map({
+      container: mapContainerRef.current,
+      style: "mapbox://styles/mapbox/outdoors-v12",
+      center, zoom: 9, pitch: 45, bearing: -12,
+    });
+    mapRef.current = map;
+
+    map.on("load", () => {
+      map.addSource("mapbox-dem", { type: "raster-dem", url: "mapbox://mapbox.terrain-rgb", tileSize: 512, maxzoom: 14 });
+      map.setTerrain({ source: "mapbox-dem", exaggeration: 1.2 });
+      map.addLayer({ id: "sky", type: "sky", paint: { "sky-type": "atmosphere", "sky-atmosphere-sun": [0.0, 0.0], "sky-atmosphere-sun-intensity": 15 } });
+
+      if (routeCoords.length) {
+        const bounds = routeCoords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds(routeCoords[0], routeCoords[0]));
+        map.fitBounds(bounds, { padding: 80, duration: 900 });
+        map.addSource("route", { type: "geojson", data: routeFeature });
+        map.addLayer({ id: "route-glow", type: "line", source: "route", paint: { "line-color": "#14b8a6", "line-width": 8, "line-opacity": 0.3, "line-blur": 8 } });
+        map.addLayer({ id: "route-line", type: "line", source: "route", paint: { "line-color": "#0f766e", "line-width": 3, "line-opacity": 0.95 } });
       } else {
-        alert(data.detail || "Failed to parse route");
+        const fc = fallbackCenter || [-120.1287, 38.8649];
+        map.addSource("trail-point", { type: "geojson", data: { type: "Feature", geometry: { type: "Point", coordinates: fc }, properties: {} } });
+        map.addLayer({ id: "trail-point-circle", type: "circle", source: "trail-point", paint: { "circle-radius": 10, "circle-color": "#10b981", "circle-opacity": 0.8, "circle-stroke-color": "#065f46", "circle-stroke-width": 2 } });
+        map.flyTo({ center: fc, zoom: 11 });
       }
-    } catch (err) {
-      alert("Error uploading file: " + err.message);
-    }
-  };
-  
+
+      if (!exploreMode && firePerimeters?.features?.length) {
+        map.addSource("fire", { type: "geojson", data: firePerimeters });
+        map.addLayer({ id: "fire-fill", type: "fill", source: "fire", paint: { "fill-color": ["case", ["==", ["get", "recency_tag"], "active"], "#ef4444", ["==", ["get", "recency_tag"], "recent"], "#f97316", "#fbbf24"], "fill-opacity": 0.18 } });
+        map.addLayer({ id: "fire-outline", type: "line", source: "fire", paint: { "line-color": ["case", ["==", ["get", "recency_tag"], "active"], "#dc2626", "#f97316"], "line-width": 1.5 } });
+        map.addLayer({ id: "fire-label", type: "symbol", source: "fire", layout: { "text-field": ["coalesce", ["get", "IncidentName"], ["get", "poly_IncidentName"], "Fire"], "text-size": 11, "text-anchor": "center" }, paint: { "text-color": "#7c2d12", "text-halo-color": "#fff", "text-halo-width": 2 } });
+        map.on("click", "fire-fill", (e) => {
+          const p = e.features[0].properties;
+          const name = p.IncidentName || p.poly_IncidentName || "Fire perimeter";
+          new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(`<strong>${name}</strong><br/>${p.recency_tag || ""} · ${p.days_since_update != null ? p.days_since_update + " days ago" : ""}`).addTo(map);
+        });
+        if (routeCoords.length) { map.moveLayer("route-glow"); map.moveLayer("route-line"); }
+      }
+
+      if (!exploreMode && snowGeojson) {
+        map.addSource("snow", { type: "geojson", data: snowGeojson });
+        map.addLayer({ id: "snow-point", type: "circle", source: "snow", paint: { "circle-radius": 10, "circle-color": "#bfdbfe", "circle-opacity": 0.85, "circle-stroke-color": "#3b82f6", "circle-stroke-width": 2 } });
+        map.addLayer({ id: "snow-label", type: "symbol", source: "snow", layout: { "text-field": ["concat", ["to-string", ["get", "max_depth_in"]], " in snow"], "text-size": 12, "text-offset": [0, 1.8], "text-anchor": "top" }, paint: { "text-color": "#1e3a8a", "text-halo-color": "#eff6ff", "text-halo-width": 2 } });
+      }
+
+      if (!exploreMode && waterGeojson?.features?.length) {
+        map.addSource("water", { type: "geojson", data: waterGeojson });
+        map.addLayer({ id: "water-point", type: "circle", source: "water", paint: {
+          "circle-radius": 8,
+          "circle-color": ["match", ["get", "water_type"], "spring", "#34d399", "lake", "#38bdf8", "pond", "#38bdf8", "reservoir", "#38bdf8", "river", "#0ea5e9", "stream", "#0ea5e9", "#22d3ee"],
+          "circle-opacity": 0.9,
+          "circle-stroke-color": "#0369a1",
+          "circle-stroke-width": 1.5,
+        }});
+        map.addLayer({ id: "water-label", type: "symbol", source: "water", layout: { "text-field": ["get", "name"], "text-size": 11, "text-offset": [0, 1.6], "text-anchor": "top" }, paint: { "text-color": "#0c4a6e", "text-halo-color": "#f0f9ff", "text-halo-width": 2 } });
+        map.on("click", "water-point", (e) => {
+          const p = e.features[0].properties;
+          new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(`<strong>${p.name}</strong><br/>${p.water_type} · ${p.distance_mi} mi from trail`).addTo(map);
+        });
+      }
+    });
+
+    return () => { map.remove(); mapRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (map.getSource("route") && routeFeature) map.getSource("route").setData(routeFeature);
+    if (map.getSource("fire") && firePerimeters) map.getSource("fire").setData(firePerimeters);
+    if (map.getSource("snow") && snowGeojson) map.getSource("snow").setData(snowGeojson);
+    if (map.getSource("water") && waterGeojson) map.getSource("water").setData(waterGeojson);
+  }, [routeFeature, firePerimeters, snowGeojson, waterGeojson]);
+
+  return (
+    <div className="relative h-[calc(100vh-9.25rem)] min-h-[42rem] overflow-hidden bg-slate-900">
+      {import.meta.env.VITE_MAPBOX_TOKEN ? (
+        <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-100 text-slate-400">Mapbox token missing</div>
+      )}
+
+      {/* Route overview card */}
+      <div className="pointer-events-none absolute left-6 top-6 max-w-xs rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
+        <p className="text-xs uppercase tracking-[0.3em] text-slate-500">{exploreMode ? "Explore" : "Route Overview"}</p>
+        <h3 className="mt-2 text-xl font-semibold text-slate-950">{selectedTrail?.name || "3D trip map"}</h3>
+        <p className="mt-1 text-xs text-slate-500">{selectedTrail?.area || ""}</p>
+        <div className={`mt-4 grid gap-3 text-sm ${exploreMode ? "grid-cols-2" : "grid-cols-2"}`}>
+          <div className="rounded-2xl bg-emerald-50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-emerald-700">Route</p>
+            <p className="mt-1 font-semibold text-emerald-950">{routeFeature ? "Loaded" : "Point only"}</p>
+          </div>
+          {!exploreMode && (
+            <div className="rounded-2xl bg-orange-50 p-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-orange-700">Fire</p>
+              <p className="mt-1 font-semibold text-orange-950">{fireCount} areas</p>
+            </div>
+          )}
+          {!exploreMode && (
+            <div className="rounded-2xl bg-sky-50 p-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-sky-700">Snow</p>
+              <p className="mt-1 font-semibold text-sky-950">{checks?.snow?.max_depth_in ?? "--"} in</p>
+            </div>
+          )}
+          {!exploreMode && (
+            <div className="rounded-2xl bg-cyan-50 p-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-cyan-700">Water</p>
+              <p className="mt-1 font-semibold text-cyan-950">{checks?.water?.count ?? "--"} sources</p>
+            </div>
+          )}
+          <div className="rounded-2xl bg-slate-50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Distance</p>
+            <p className="mt-1 font-semibold text-slate-900">{route?.distance_mi?.toFixed?.(1) || selectedTrail?.length_miles || "--"} mi</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div className="pointer-events-none absolute bottom-6 left-6 rounded-2xl border border-white/30 bg-white/90 p-4 text-sm shadow-2xl backdrop-blur">
+        <div className="flex items-center gap-3">
+          <span className="h-1.5 w-10 rounded-full bg-teal-900 shadow-[0_0_0_6px_rgba(20,184,166,0.25)]" />
+          <span className="font-medium text-slate-800">GPX/trail route</span>
+        </div>
+        {!exploreMode && (
+          <>
+            <div className="mt-3 flex items-center gap-3">
+              <span className="h-4 w-10 rounded bg-orange-500/30 ring-2 ring-orange-700" />
+              <span className="font-medium text-slate-800">Fire perimeter</span>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <span className="h-4 w-4 rounded-full border-2 border-blue-500 bg-blue-200" />
+              <span className="font-medium text-slate-800">Snow depth</span>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <span className="h-4 w-4 rounded-full border-2 border-cyan-600 bg-cyan-200" />
+              <span className="font-medium text-slate-800">Water source</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Briefing card (plan mode only) */}
+      {!exploreMode && report?.bullets?.length ? (
+        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
+          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Briefing</p>
+          <ul className="mt-4 space-y-3 text-sm text-slate-700">
+            {report.bullets.slice(0, 4).map((b, i) => (
+              <li key={i} className="flex gap-3">
+                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                <span>{b}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : !exploreMode && checks ? (
+        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
+          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Telemetry</p>
+          <div className="mt-4 space-y-2 text-sm text-slate-700">
+            <p>Weather: {checks.weather?.forecast?.[0]?.short || "Loaded"}</p>
+            <p>AQI: {checks.aqi?.observations?.[0]?.aqi ?? "—"}</p>
+            <p>Snow: {checks.snow?.message || "Loaded"}</p>
+          </div>
+        </div>
+      ) : null}
+
+      <ElevationProfile route={route} />
+    </div>
+  );
+}
+
+function ReportStep({ planResult, selectedTrail }) {
+  const route = planResult?.route;
+  const mapLayers = planResult?.map_layers;
+  const checks = planResult?.checks;
+  const report = planResult?.report;
+  const firePerimeters = mapLayers?.fire_perimeters || checks?.fire?.perimeters || null;
+  const snowGeojson = checks?.snow?.geojson || null;
+  const waterGeojson = checks?.water?.geojson || null;
+  const routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
+  const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
+
+  return (
+    <MapCanvas
+      routeFeature={routeFeature}
+      firePerimeters={firePerimeters}
+      snowGeojson={snowGeojson}
+      waterGeojson={waterGeojson}
+      fallbackCenter={fallbackCenter}
+      report={report}
+      checks={checks}
+      selectedTrail={selectedTrail}
+      route={route}
+      exploreMode={false}
+    />
+  );
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+
+function DashboardView({ onNewPlan, onExplore }) {
+  const sessions = []; // placeholder — will be populated from DB
+
+  return (
+    <div className="min-h-screen bg-[#f6f3ee]">
+      <header className="border-b border-slate-200/70 bg-[#f6f3ee]/95 backdrop-blur sticky top-0 z-30">
+        <div className="mx-auto max-w-7xl px-6 py-5 sm:px-8 lg:px-12 flex items-center justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.5em] text-emerald-700">Backcountry</p>
+            <h1 className="text-xl font-semibold text-slate-900 mt-0.5">Trip Planner</h1>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-7xl px-6 py-12 sm:px-8 lg:px-12 space-y-12">
+        {/* Hero */}
+        <div>
+          <h2 className="text-4xl font-semibold text-slate-900">Where are you heading?</h2>
+          <p className="mt-3 text-slate-500 max-w-xl">Plan a full backpacking trip with weather, fire, and snow checks — or just explore a trail on the map.</p>
+        </div>
+
+        {/* CTAs */}
+        <div className="grid gap-5 sm:grid-cols-2 max-w-2xl">
+          <button onClick={onNewPlan}
+            className="group rounded-[28px] bg-emerald-600 p-8 text-left shadow-xl shadow-emerald-500/20 hover:bg-emerald-700 transition">
+            <p className="text-xs uppercase tracking-[0.4em] text-emerald-200">Full planning</p>
+            <h3 className="mt-3 text-2xl font-semibold text-white">New Plan</h3>
+            <p className="mt-2 text-sm text-emerald-100/80">Route, dates, itinerary, pre-trip checks, and a full report.</p>
+            <div className="mt-6 flex items-center gap-2 text-emerald-200 text-sm font-semibold">Start planning <span>→</span></div>
+          </button>
+
+          <button onClick={onExplore}
+            className="group rounded-[28px] border border-slate-200 bg-white p-8 text-left shadow-sm hover:border-emerald-300 hover:shadow-md transition">
+            <p className="text-xs uppercase tracking-[0.4em] text-slate-400">Quick look</p>
+            <h3 className="mt-3 text-2xl font-semibold text-slate-900">Explore</h3>
+            <p className="mt-2 text-sm text-slate-500">Search a trail and view it on the 3D map without running checks.</p>
+            <div className="mt-6 flex items-center gap-2 text-emerald-600 text-sm font-semibold">Open map <span>→</span></div>
+          </button>
+        </div>
+
+        {/* Sessions */}
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-slate-500 mb-5">Saved plans</p>
+          {sessions.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-8 py-12 text-center">
+              <p className="text-slate-400 text-sm">No saved plans yet. Start a new plan above.</p>
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-3">
+              {sessions.map((s) => (
+                <div key={s.id} className="rounded-2xl border border-slate-200 bg-white p-5">
+                  <p className="font-semibold text-slate-900">{s.name}</p>
+                  <p className="text-xs text-slate-400 mt-1">{s.date}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// ─── Explore mode ─────────────────────────────────────────────────────────────
+
+function ExploreView({ onBack }) {
+  const [step, setStep] = useState("search");
+  const [trailName, setTrailName] = useState("");
+  const [selectedTrail, setSelectedTrail] = useState(null);
+  const [searchResults, setSearchResults] = useState([]);
+  const [gpxRoute, setGpxRoute] = useState(null);
+  const [inputMode, setInputMode] = useState("name");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const fileInputRef = useRef(null);
+
   const handleNameSearch = async () => {
     if (!trailName.trim()) return;
-    
-    // Clear GPX state when switching to name search
-    setGpxRoute(null);
-    
     try {
-      // Call trail match with just the name hint, no route
       const res = await fetch("/api/trail/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ route: { points: [] }, name_hint: trailName }),
       });
       const data = await res.json();
-      
       if (data.auto_selected) {
-        addMessage("assistant", `Found: ${data.auto_selected.name} in ${data.auto_selected.area}. Continue to dates to set your trip window.`);
-        setRoute(null); // No GPX route, just trail
-        setSelectedTrailId(data.auto_selected.id);
         setSelectedTrail(data.auto_selected);
-        setTrailMatch({ auto_selected: data.auto_selected, shortlist: data.shortlist || [data.auto_selected] });
-        goToStep("dates");
+        setSearchResults([]);
+        setStep("map");
       } else if (data.shortlist?.length) {
-        setNameSearchResults(data.shortlist);
-        addMessage("assistant", `Found ${data.shortlist.length} trails matching "${trailName}". Select one to continue.`);
-      } else {
-        addMessage("assistant", `No trails found matching "${trailName}". Try a different name or region.`);
+        setSearchResults(data.shortlist);
       }
-    } catch (err) {
-      addMessage("assistant", "Error searching for trails: " + err.message);
-    }
+    } catch { /* ignore */ }
   };
-  
-  const handleNameSelect = async (trail) => {
-    setSelectedTrailId(trail.id);
+
+  const handleSuggestionSelect = async (trail) => {
     setTrailName(trail.name);
     setSelectedTrail(trail);
-    setNameSearchResults([]);
-    addMessage("assistant", `Selected: ${trail.name}. Continue to set your trip dates.`);
-    goToStep("dates");
-
-    // Fetch full trail data (includes geometry) in the background
+    setStep("map");
     try {
       const res = await fetch("/api/trail/match", {
         method: "POST",
@@ -981,29 +800,202 @@ export default function App() {
         body: JSON.stringify({ route: { points: [] }, name_hint: trail.name }),
       });
       const data = await res.json();
-      const fullTrail = data.shortlist?.find((t) => t.id === trail.id) || data.auto_selected || trail;
-      setTrailMatch({ auto_selected: fullTrail, shortlist: data.shortlist || [fullTrail] });
-      setSelectedTrail(fullTrail);
-    } catch {
-      setTrailMatch({ auto_selected: trail, shortlist: [trail] });
-    }
+      const full = data.shortlist?.find((t) => t.id === trail.id) || data.auto_selected || trail;
+      setSelectedTrail(full);
+    } catch { /* ignore */ }
   };
-  
+
+  const handleGpxUpload = async () => {
+    if (!selectedFile) return;
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    try {
+      const res = await fetch("/api/route/parse", { method: "POST", body: formData });
+      const data = await res.json();
+      if (data.route) { setGpxRoute(data.route); setStep("map"); }
+    } catch { /* ignore */ }
+  };
+
+  const routeFeature = routeToFeature(gpxRoute) || toLineFeature(selectedTrail?.geometry);
+  const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
+
+  if (step === "map") {
+    return (
+      <div className="min-h-screen bg-slate-900">
+        <div className="sticky top-0 z-30 border-b border-white/10 bg-slate-900/95 backdrop-blur px-6 py-3 flex items-center justify-between">
+          <BackBtn label="← Dashboard" onClick={onBack} />
+          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Explore — {selectedTrail?.name || "Custom GPX"}</p>
+          <button onClick={() => setStep("search")} className="text-xs uppercase tracking-[0.3em] text-slate-400 hover:text-white transition">← Search</button>
+        </div>
+        <MapCanvas
+          routeFeature={routeFeature}
+          firePerimeters={null}
+          snowGeojson={null}
+          fallbackCenter={fallbackCenter}
+          selectedTrail={selectedTrail}
+          route={gpxRoute}
+          exploreMode={true}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#f6f3ee]">
+      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-[#f6f3ee]/95 backdrop-blur">
+        <div className="mx-auto max-w-7xl px-6 py-4 sm:px-8 lg:px-12 flex items-center gap-6">
+          <BackBtn label="← Dashboard" onClick={onBack} />
+          <div>
+            <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">Explore Mode</p>
+            <p className="text-sm text-slate-500 mt-0.5">Find a trail and view it on the map</p>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-3xl px-6 py-10 sm:px-8 lg:px-12 space-y-8">
+        <div className="flex gap-3 p-1 bg-slate-100 rounded-xl w-fit">
+          <button onClick={() => setInputMode("name")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${inputMode === "name" ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>Trail Name</button>
+          <button onClick={() => setInputMode("gpx")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${inputMode === "gpx" ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>Upload GPX</button>
+        </div>
+
+        {inputMode === "name" ? (
+          <div className="rounded-[32px] border border-emerald-100 bg-gradient-to-br from-white via-white to-emerald-50/40 p-10 shadow-lg shadow-emerald-200/30">
+            <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">Trail Search</p>
+            <h3 className="mt-3 text-2xl font-semibold text-slate-900">Find a trail</h3>
+            <div className="mt-6">
+              <TrailSearchInput trailName={trailName} setTrailName={setTrailName} onNameSearch={handleNameSearch} onSuggestionSelect={handleSuggestionSelect} />
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-[32px] border border-emerald-100 bg-gradient-to-br from-white via-white to-emerald-50/40 p-10 shadow-lg shadow-emerald-200/30">
+            <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">GPX Upload</p>
+            <h3 className="mt-3 text-2xl font-semibold text-slate-900">View your GPX route</h3>
+            <div className="mt-8 rounded-3xl border border-dashed border-emerald-300 bg-white/80 px-6 py-10 text-center">
+              <input ref={fileInputRef} type="file" accept=".gpx" onChange={(e) => setSelectedFile(e.target.files?.[0])} className="hidden" id="explore-gpx" />
+              <label htmlFor="explore-gpx" className="cursor-pointer block text-sm text-slate-500 mb-4">
+                {selectedFile ? selectedFile.name : "Click to upload GPX"}
+              </label>
+              <button onClick={handleGpxUpload} disabled={!selectedFile}
+                className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
+                View on Map
+              </button>
+            </div>
+          </div>
+        )}
+
+        {searchResults.length > 0 && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {searchResults.map((trail) => (
+              <div key={trail.id} onClick={() => handleSuggestionSelect(trail)}
+                className="cursor-pointer rounded-2xl border border-slate-200 bg-white p-5 hover:border-emerald-300 transition">
+                <h4 className="font-semibold text-slate-900">{trail.name}</h4>
+                <p className="text-sm text-slate-500 mt-1">{trail.area} · {trail.length_miles} mi</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ─── Plan mode ────────────────────────────────────────────────────────────────
+
+export function PlanView({ onBack }) {
+  const [activeStep, setActiveStep] = useState("upload");
+  const [route, setRoute] = useState(null);
+  const [gpxRoute, setGpxRoute] = useState(null);
+  const [startDate, setStartDate] = useState("2026-04-30");
+  const [endDate, setEndDate] = useState("2026-05-02");
+  const [trailMatch, setTrailMatch] = useState(null);
+  const [selectedTrail, setSelectedTrail] = useState(null);
+  const [selectedTrailId, setSelectedTrailId] = useState(null);
+  const [useCustomGpx, setUseCustomGpx] = useState(false);
+  const [numDays, setNumDays] = useState(3);
+  const [tripType, setTripType] = useState("out-and-back");
+  const [checks, setChecks] = useState(null);
+  const [checksLoading, setChecksLoading] = useState({ weather: false, aqi: false, fire: false, snow: false, water: false });
+  const [planResult, setPlanResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [inputMode, setInputMode] = useState("gpx");
+  const [trailName, setTrailName] = useState("");
+  const [nameSearchResults, setNameSearchResults] = useState([]);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const stepIndex = PLAN_STEPS.findIndex((s) => s.id === activeStep);
+  const progress = ((stepIndex + 1) / PLAN_STEPS.length) * 100;
+  const goTo = (id) => setActiveStep(id);
+
+  // ── Upload handlers ──
+
+  const handleFileChange = (e) => { const f = e.target.files?.[0]; if (f) setSelectedFile(f); };
+
+  const handleUpload = async () => {
+    if (!selectedFile) return;
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    try {
+      const res = await fetch("/api/route/parse", { method: "POST", body: formData });
+      const data = await res.json();
+      if (data.route) {
+        setRoute(data.route);
+        setGpxRoute(data.route);
+        // Pre-fill trip type from trail data if available
+        goTo("dates");
+      } else alert(data.detail || "Failed to parse route");
+    } catch (err) { alert("Error uploading: " + err.message); }
+  };
+
+  const handleNameSearch = async () => {
+    if (!trailName.trim()) return;
+    setGpxRoute(null);
+    try {
+      const res = await fetch("/api/trail/match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ route: { points: [] }, name_hint: trailName }),
+      });
+      const data = await res.json();
+      if (data.auto_selected) {
+        setRoute(null);
+        setSelectedTrailId(data.auto_selected.id);
+        setSelectedTrail(data.auto_selected);
+        setTrailMatch({ auto_selected: data.auto_selected, shortlist: data.shortlist || [data.auto_selected] });
+        goTo("dates");
+      } else if (data.shortlist?.length) {
+        setNameSearchResults(data.shortlist);
+      }
+    } catch { /* ignore */ }
+  };
+
+  const handleNameSelect = async (trail) => {
+    setSelectedTrailId(trail.id);
+    setTrailName(trail.name);
+    setSelectedTrail(trail);
+    setNameSearchResults([]);
+    goTo("dates");
+    try {
+      const res = await fetch("/api/trail/match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ route: { points: [] }, name_hint: trail.name }),
+      });
+      const data = await res.json();
+      const full = data.shortlist?.find((t) => t.id === trail.id) || data.auto_selected || trail;
+      setTrailMatch({ auto_selected: full, shortlist: data.shortlist || [full] });
+      setSelectedTrail(full);
+      // Auto-detect route type from trail data
+      if (full.route_type) setTripType(full.route_type === "loop" ? "loop" : "out-and-back");
+    } catch { setTrailMatch({ auto_selected: trail, shortlist: [trail] }); }
+  };
+
+  // ── Dates handler ──
+
   const handleDatesNext = async () => {
-    // If we have a trail from name search (no GPX), skip to checks directly
-    if (!gpxRoute && selectedTrailId) {
-      addMessage("assistant", "Running pre-trip checks for your selected trail...");
-      goToStep("checks");
-      await runPreTripChecks();
-      return;
-    }
-    
-    // Otherwise go to match step for GPX route
-    setLoading(true);
-    
+    if (!gpxRoute && selectedTrailId) { goTo("match"); return; }
     if (gpxRoute) {
-      addMessage("assistant", "Matching your route to known trails in Northern CA...");
-      
+      setLoading(true);
       try {
         const res = await fetch("/api/trail/match", {
           method: "POST",
@@ -1012,193 +1004,167 @@ export default function App() {
         });
         const data = await res.json();
         setTrailMatch(data);
-        if (data.auto_selected) {
-          setSelectedTrailId(data.auto_selected.id);
-          addMessage("assistant", `Best match: ${data.auto_selected.name} in ${data.auto_selected.area}. Confirm to continue.`);
-        } else if (data.shortlist?.length) {
-          addMessage("assistant", `Found ${data.shortlist.length} candidate trails.`);
-        } else {
-          addMessage("assistant", "No matching trails found. You can proceed without trail matching.");
-        }
-        goToStep("match");
-      } catch (err) {
-        addMessage("assistant", "Could not match trail. You can proceed without trail matching.");
-        goToStep("match");
-      }
-    } else if (selectedTrailId) {
-      // Using name search trail - skip match step, go to checks
-      addMessage("assistant", "Using selected trail. Running pre-trip checks...");
-      goToStep("checks");
-      await runPreTripChecks();
-      return;
+        if (data.auto_selected) setSelectedTrailId(data.auto_selected.id);
+      } catch { /* ignore */ }
+      setLoading(false);
+      goTo("match");
     }
-    setLoading(false);
   };
 
-  const handleMatchNext = async () => {
-    goToStep("checks");
-    await runPreTripChecks();
+  // ── Match handlers ──
+
+  const handleMatchNext = () => { goTo("itinerary"); };
+
+  const handleUseCustomGpx = () => {
+    setUseCustomGpx(true);
+    setSelectedTrail(null);
+    setSelectedTrailId(null);
+    goTo("itinerary");
   };
-  
+
+  // ── Checks ──
+
   const runPreTripChecks = async () => {
     setLoading(true);
     setChecks(null);
-    addMessage("assistant", "Running pre-trip checks for weather, AQI, fire, and snow...");
+    let lat, lng;
+    if (gpxRoute?.midpoint) { [lat, lng] = gpxRoute.midpoint; }
+    else if (selectedTrail) { lat = selectedTrail.lat; lng = selectedTrail.lng; }
+    else { setLoading(false); return; }
 
-    try {
-      let lat, lng;
-      if (gpxRoute?.midpoint) {
-        [lat, lng] = gpxRoute.midpoint;
-      } else if (selectedTrail) {
-        lat = selectedTrail.lat;
-        lng = selectedTrail.lng;
-      } else {
-        throw new Error("No trail or route available. Please upload a GPX or select a trail first.");
-      }
+    const payload = { lat, lng, start_date: startDate, end_date: endDate };
+    setChecksLoading({ weather: true, aqi: true, fire: true, snow: true, water: true });
 
-      const payload = { lat, lng, start_date: startDate, end_date: endDate };
-      setChecksLoading({ weather: true, aqi: true, fire: true, snow: true });
+    const postJson = (url, body) =>
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
 
-      const postJson = (url, body) =>
-        fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    const runCheck = async (key, url, body) => {
+      const result = await postJson(url, body);
+      setChecks((prev) => ({ ...(prev || {}), [key]: result }));
+      setChecksLoading((prev) => ({ ...prev, [key]: false }));
+      return result;
+    };
 
-      const runCheck = async (key, url, body) => {
-        const result = await postJson(url, body);
-        setChecks((prev) => ({ ...(prev || {}), [key]: result }));
-        setChecksLoading((prev) => ({ ...prev, [key]: false }));
-        return result;
-      };
+    const [weather, aqi, fire, snow, water] = await Promise.all([
+      runCheck("weather", "/api/checks/weather", payload),
+      runCheck("aqi", "/api/checks/aqi", payload),
+      runCheck("fire", "/api/checks/fire", { ...payload, radius: 50.0 }),
+      runCheck("snow", "/api/checks/snow", { ...payload, radius: 5.0 }),
+      runCheck("water", "/api/checks/water", { lat, lng, radius: 5.0 }),
+    ]);
 
-      const [weather, aqi, fire, snow] = await Promise.all([
-        runCheck("weather", "/api/checks/weather", payload),
-        runCheck("aqi", "/api/checks/aqi", payload),
-        runCheck("fire", "/api/checks/fire", { ...payload, radius: 50.0 }),
-        runCheck("snow", "/api/checks/snow", { ...payload, radius: 5.0 }),
-      ]);
-
-      const allChecks = { weather, aqi, fire, snow };
-      const risk = computeRisk(allChecks);
-      const report = buildReport(selectedTrail, risk);
-      const data = {
-        route: gpxRoute,
-        selected_trail: selectedTrail,
-        checks: allChecks,
-        risk,
-        report,
-        map_layers: { fire_perimeters: fire?.perimeters },
-      };
-      setPlanResult(data);
-      addMessage("assistant", `Pre-trip checks complete. Status: ${risk.status.toUpperCase()}`);
-    } catch (err) {
-      setChecksLoading({ weather: false, aqi: false, fire: false, snow: false });
-      addMessage("assistant", "Error running checks: " + err.message);
-    }
+    const allChecks = { weather, aqi, fire, snow, water };
+    const risk = computeRisk(allChecks);
+    const report = buildReport(selectedTrail, risk);
+    setPlanResult({
+      route: gpxRoute,
+      selected_trail: selectedTrail,
+      checks: allChecks,
+      risk,
+      report,
+      map_layers: { fire_perimeters: fire?.perimeters },
+    });
     setLoading(false);
   };
-  
-  const handleChecksNext = () => {
-    goToStep("report");
-  };
-  
-  const renderStep = () => {
-    switch (step.id) {
-      case "upload":
-        return (
-          <>
-            <UploadStep
-              selectedFile={selectedFile}
-              fileInputRef={fileInputRef}
-              onFileChange={handleFileChange}
-              onUpload={handleUpload}
-              inputMode={inputMode}
-              setInputMode={setInputMode}
-              trailName={trailName}
-              setTrailName={setTrailName}
-              onNameSearch={handleNameSearch}
-              onModeChange={handleModeChange}
-              onSuggestionSelect={handleNameSelect}
-            />
-            {nameSearchResults.length > 0 && (
-              <div className="grid gap-4 md:grid-cols-3 mt-6">
-                {nameSearchResults.map((trail) => (
-                  <div key={trail.id} onClick={() => handleNameSelect(trail)} className="cursor-pointer rounded-2xl border border-slate-200 bg-white p-5 hover:border-emerald-300 transition">
-                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Candidate</p>
-                    <h4 className="mt-3 text-lg font-semibold text-slate-900">{trail.name}</h4>
-                    <p className="text-slate-500">{trail.area} · {trail.distance_mi} mi</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        );
-      case "dates":
-        return <DatesStep startDate={startDate} endDate={endDate} onStartDateChange={setStartDate} onEndDateChange={setEndDate} onNext={handleDatesNext} />;
-      case "match":
-        return <MatchStep route={gpxRoute} trailMatch={trailMatch} selectedTrailId={selectedTrailId} onTrailSelect={setSelectedTrailId} onNext={handleMatchNext} loading={loading} />;
-      case "checks":
-        return <ChecksStep checks={checks} checksLoading={checksLoading} onNext={handleChecksNext} />;
-      case "report":
-        return <ReportStep planResult={planResult} selectedTrail={selectedTrail} />;
-      default:
-        return null;
-    }
-  };
-  
-  const next = (step.id === "upload" ? handleUpload : 
-                     step.id === "dates" ? handleDatesNext : 
-                     step.id === "match" ? handleMatchNext : 
-                     step.id === "checks" ? handleChecksNext : null);
-  
+
+  const handleChecksNext = () => goTo("report");
+
+  // ── Render ──
+
+  const isReportStep = activeStep === "report";
+
   return (
     <div className="min-h-screen bg-[#f6f3ee]">
       <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-[#f6f3ee]/95 backdrop-blur">
         <div className="mx-auto max-w-7xl px-6 py-4 sm:px-8 lg:px-12">
           <div className="flex items-center justify-between gap-6">
-            <div>
-              <p className="text-xs uppercase tracking-[0.5em] text-emerald-700">Backcountry Readiness</p>
-              <p className="mt-1 text-sm text-slate-500">Step {stepIndex + 1} of {steps.length}: {step.title}</p>
-            </div>
-            <div className="w-full max-w-xl">
-              <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                <div className="h-full rounded-full bg-emerald-600 transition-all duration-300" style={{ width: `${progress}%` }} />
+            <div className="flex items-center gap-5">
+              <BackBtn label="← Home" onClick={onBack} />
+              <div>
+                <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">Plan Mode</p>
+                <p className="text-sm text-slate-500 mt-0.5">{PLAN_STEPS[stepIndex]?.label}</p>
               </div>
-              <div className="mt-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                <span>Progress</span>
-                <span>{Math.round(progress)}%</span>
+            </div>
+            <div className="w-full max-w-xs">
+              <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-full rounded-full bg-emerald-600 transition-all duration-300" style={{ width: `${progress}%` }} />
               </div>
             </div>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            {steps.map((item, idx) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => goToStep(item.id)}
-                className={classNames(
-                  "rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] transition",
-                  activeStep === item.id
-                    ? "bg-emerald-600 text-white"
-                    : idx < stepIndex
-                    ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                    : "bg-white text-slate-500 hover:bg-slate-50"
-                )}
-              >
-                {idx + 1}. {item.id}
+            {PLAN_STEPS.map((s, idx) => (
+              <button key={s.id} onClick={() => goTo(s.id)}
+                className={classNames("rounded-full px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] transition",
+                  activeStep === s.id ? "bg-emerald-600 text-white" : idx < stepIndex ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-white text-slate-500 hover:bg-slate-50")}>
+                {idx + 1}. {s.label}
               </button>
             ))}
           </div>
         </div>
       </header>
+
       <main>
-        <div className={classNames(
-          activeStep === "report"
-            ? ""
-            : "mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10"
-        )}>
-          {activeStep !== "report" && <StepHeader step={step} stepIndex={stepIndex} />}
-          {renderStep()}
-        </div>
+        {isReportStep ? (
+          <ReportStep planResult={planResult} selectedTrail={selectedTrail} />
+        ) : (
+          <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10">
+            {activeStep === "upload" && (
+              <UploadStep
+                selectedFile={selectedFile} fileInputRef={fileInputRef}
+                onFileChange={handleFileChange} onUpload={handleUpload}
+                inputMode={inputMode} setInputMode={setInputMode}
+                trailName={trailName} setTrailName={setTrailName}
+                onNameSearch={handleNameSearch} onSuggestionSelect={handleNameSelect}
+              />
+            )}
+            {activeStep === "upload" && nameSearchResults.length > 0 && (
+              <div className="grid gap-4 md:grid-cols-3">
+                {nameSearchResults.map((trail) => (
+                  <div key={trail.id} onClick={() => handleNameSelect(trail)}
+                    className="cursor-pointer rounded-2xl border border-slate-200 bg-white p-5 hover:border-emerald-300 transition">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Result</p>
+                    <h4 className="mt-3 text-lg font-semibold text-slate-900">{trail.name}</h4>
+                    <p className="text-slate-500">{trail.area} · {trail.length_miles} mi</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {activeStep === "dates" && (
+              <DatesStep startDate={startDate} endDate={endDate} onStartDateChange={setStartDate} onEndDateChange={setEndDate} onNext={handleDatesNext} />
+            )}
+            {activeStep === "match" && (
+              <MatchStep
+                route={gpxRoute} trailMatch={trailMatch}
+                selectedTrailId={selectedTrailId} onTrailSelect={setSelectedTrailId}
+                onNext={handleMatchNext} loading={loading}
+                onUseCustomGpx={handleUseCustomGpx} hasCustomGpx={!!gpxRoute}
+              />
+            )}
+            {activeStep === "itinerary" && (
+              <ItineraryStep
+                route={useCustomGpx ? gpxRoute : (gpxRoute || null)}
+                selectedTrail={useCustomGpx ? null : selectedTrail}
+                numDays={numDays} setNumDays={setNumDays}
+                tripType={tripType} setTripType={setTripType}
+                onNext={() => { goTo("checks"); runPreTripChecks(); }}
+              />
+            )}
+            {activeStep === "checks" && (
+              <ChecksStep checks={checks} checksLoading={checksLoading} onNext={handleChecksNext} />
+            )}
+          </div>
+        )}
       </main>
     </div>
   );
+}
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
+
+export default function App() {
+  const [appMode, setAppMode] = useState("dashboard");
+
+  if (appMode === "explore") return <ExploreView onBack={() => setAppMode("dashboard")} />;
+  if (appMode === "plan") return <PlanView onBack={() => setAppMode("dashboard")} />;
+  return <DashboardView onNewPlan={() => setAppMode("plan")} onExplore={() => setAppMode("explore")} />;
 }

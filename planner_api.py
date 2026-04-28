@@ -23,6 +23,7 @@ from planner.checks.weather import get_weather_summary
 from planner.checks.aqi import get_aqi_summary
 from planner.checks.fire import get_fire_summary
 from planner.checks.snow import get_snow_summary
+from planner.checks.water import get_water_summary
 from planner.risk_engine import evaluate_risk
 from planner.report_ai import build_ai_report
 from planner.map_layers import build_map_layers
@@ -176,6 +177,19 @@ async def plan_trip(
         "report": report,
         "map_layers": map_layers,
     }
+
+
+@router.post("/api/checks/water")
+async def check_water(payload: dict):
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    radius = payload.get("radius", 5.0)
+    if not lat or not lng:
+        raise HTTPException(status_code=400, detail="lat and lng required")
+    logger.info(f"Water check for {lat}, {lng} (radius: {radius}mi)")
+    water = get_water_summary(lat, lng, radius_miles=radius)
+    logger.info(f"Water result: {water.get('message')}")
+    return water
 
 
 NOHRSC_WMS = "https://mapservices.weather.noaa.gov/raster/services/snow/NOHRSC_Snow_Analysis/MapServer/WMSServer"
