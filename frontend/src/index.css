@@ -28,38 +28,78 @@ button {
 
 :root[data-theme="dark"] {
   color: #e2e8f0;
-  background-color: #020617;
+  background-color: #0a0a0a;
 }
 
 :root[data-theme="dark"] body {
-  background-color: #020617;
+  background-color: #0a0a0a;
   color: #e2e8f0;
 }
 
+/* Surfaces */
 :root[data-theme="dark"] [class*="bg-white"] {
-  background-color: #0f172a !important;
+  background-color: #1c1c1e !important;
 }
 
 :root[data-theme="dark"] [class*="bg-slate-50"] {
-  background-color: #0f172a !important;
+  background-color: #1c1c1e !important;
 }
 
 :root[data-theme="dark"] [class*="bg-slate-100"] {
-  background-color: #111827 !important;
+  background-color: #252528 !important;
 }
 
 :root[data-theme="dark"] [class*="bg-[#f6f3ee]"] {
-  background-color: #020617 !important;
+  background-color: #0a0a0a !important;
 }
 
-:root[data-theme="dark"] [class*="border-slate-200"] {
-  border-color: #1e293b !important;
+/* Gradient cards — kill the gradient, use a flat dark surface */
+:root[data-theme="dark"] [class*="bg-gradient"] {
+  background-image: none !important;
+  background-color: #1c1c1e !important;
 }
 
+/* Borders */
+:root[data-theme="dark"] [class*="border-slate-200"],
+:root[data-theme="dark"] [class*="border-emerald-100"] {
+  border-color: #2c2c2e !important;
+}
+
+/* Text */
 :root[data-theme="dark"] [class*="text-slate-900"] {
-  color: #f8fafc !important;
+  color: #f2f2f7 !important;
+}
+
+:root[data-theme="dark"] [class*="text-slate-600"] {
+  color: #aeaeb2 !important;
 }
 
 :root[data-theme="dark"] [class*="text-slate-500"] {
-  color: #cbd5f5 !important;
+  color: #8e8e93 !important;
+}
+
+:root[data-theme="dark"] [class*="text-slate-400"] {
+  color: #636366 !important;
+}
+
+/* Inputs */
+:root[data-theme="dark"] input[type="text"],
+:root[data-theme="dark"] input[type="date"],
+:root[data-theme="dark"] textarea {
+  background-color: #252528 !important;
+  color: #f2f2f7 !important;
+  border-color: #3a3a3c !important;
+}
+
+:root[data-theme="dark"] input::placeholder {
+  color: #636366 !important;
+}
+
+/* Shadows — tone down harsh light shadows */
+:root[data-theme="dark"] [class*="shadow-emerald"] {
+  box-shadow: none !important;
+}
+
+:root[data-theme="dark"] [class*="shadow-slate"] {
+  box-shadow: none !important;
 }

@@ -6,8 +6,8 @@ import "./index.css";
 
 const PLAN_STEPS = [
   { id: "upload",    label: "Route" },
-  { id: "dates",     label: "Dates" },
   { id: "match",     label: "Match" },
+  { id: "dates",     label: "Dates" },
   { id: "itinerary", label: "Itinerary" },
   { id: "checks",    label: "Checks" },
   { id: "report",    label: "Report" },
@@ -39,9 +39,15 @@ function computeRisk(checks) {
     if (obs.aqi >= 150) { status = "no-go"; reasons.push(`AQI ${obs.aqi} (${obs.category})`); }
     else if (obs.aqi >= 100 && status !== "no-go") { status = "caution"; reasons.push(`AQI ${obs.aqi} (${obs.category})`); }
   }
-  if (checks.fire?.perimeters?.features?.length) {
+  // Only flag caution for fires within 5 miles and updated within the last year
+  const nearbyRecentFires = (checks.fire?.perimeters?.features || []).filter(f => {
+    const d = f.properties?.distance_from_midpoint_mi;
+    const days = f.properties?.days_since_update;
+    return (d == null || d <= 5) && (days == null || days <= 365);
+  });
+  if (nearbyRecentFires.length) {
     if (status === "go") status = "caution";
-    reasons.push("Active fire perimeters present in region");
+    reasons.push(`${nearbyRecentFires.length} fire perimeter(s) within 5 mi (past year)`);
   }
   const snowDepth = checks.snow?.max_depth_in;
   if (snowDepth >= 12 && status !== "no-go") { status = "caution"; reasons.push(`Snow depth ~${snowDepth} in`); }
@@ -91,6 +97,34 @@ function getPointAtMile(pts, targetMile) {
   return pts[pts.length - 1];
 }
 
+function interpolateRoutePoints(pts, n = 10) {
+  if (!pts?.length) return [];
+  if (pts.length >= n) {
+    const step = Math.max(1, Math.floor(pts.length / n));
+    return pts.filter((_, i) => i % step === 0).slice(0, n);
+  }
+  // Fewer source points than requested — interpolate between them
+  const result = [];
+  let totalLen = 0;
+  for (let i = 1; i < pts.length; i++) totalLen += haversineMiles(pts[i-1].lat, pts[i-1].lng, pts[i].lat, pts[i].lng);
+  if (totalLen === 0) return pts;
+  const step = totalLen / (n - 1);
+  let walked = 0;
+  let seg = 0;
+  for (let s = 0; s < n; s++) {
+    const target = s * step;
+    while (seg < pts.length - 2 && walked + haversineMiles(pts[seg].lat, pts[seg].lng, pts[seg+1].lat, pts[seg+1].lng) < target) {
+      walked += haversineMiles(pts[seg].lat, pts[seg].lng, pts[seg+1].lat, pts[seg+1].lng);
+      seg++;
+    }
+    const segLen = haversineMiles(pts[seg].lat, pts[seg].lng, pts[seg+1]?.lat ?? pts[seg].lat, pts[seg+1]?.lng ?? pts[seg].lng);
+    const t = segLen > 0 ? Math.min(1, (target - walked) / segLen) : 0;
+    const next = pts[seg+1] || pts[seg];
+    result.push({ lat: pts[seg].lat + t * (next.lat - pts[seg].lat), lng: pts[seg].lng + t * (next.lng - pts[seg].lng) });
+  }
+  return result;
+}
+
 function getDaytimePeriods(forecast) {
   return (forecast || []).filter(p => !/night|tonight/i.test(p.name || ""));
 }
@@ -111,8 +145,14 @@ function checkStatus(key, data) {
     return { label: "Good", cls: "bg-emerald-50 text-emerald-700" };
   }
   if (key === "fire") {
-    const count = data.perimeters?.features?.length || 0;
-    if (count > 0) return { label: "Caution", cls: "bg-amber-50 text-amber-700" };
+    const nearby = (data.perimeters?.features || []).filter(f => {
+      const d = f.properties?.distance_from_midpoint_mi;
+      const days = f.properties?.days_since_update;
+      return (d == null || d <= 5) && (days == null || days <= 365);
+    });
+    if (nearby.length > 0) return { label: `Caution (${nearby.length} nearby)`, cls: "bg-amber-50 text-amber-700" };
+    const total = data.perimeters?.features?.length || 0;
+    if (total > 0) return { label: `${total} (distant/old)`, cls: "bg-yellow-50 text-yellow-700" };
     return { label: "Good", cls: "bg-emerald-50 text-emerald-700" };
   }
   if (key === "snow") {
@@ -178,7 +218,7 @@ function ElevationProfile({ route }) {
   const areaPath = `M ${xScale(0)},${(padT + chartH).toFixed(1)} L ${linePoints} L ${xScale(totalMi)},${(padT + chartH).toFixed(1)} Z`;
 
   return (
-    <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 w-[500px] rounded-3xl border border-white/30 bg-white/90 p-4 shadow-2xl backdrop-blur">
+    <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 w-[500px] rounded-3xl border border-white/30 bg-white/90 p-4 shadow-2xl backdrop-blur z-10">
       <p className="mb-2 text-[10px] uppercase tracking-[0.35em] text-slate-500">Elevation Profile</p>
       <div className="relative">
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 80 }} preserveAspectRatio="none">
@@ -324,36 +364,22 @@ function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputM
   );
 }
 
-function DatesStep({ startDate, onStartDateChange, numDays, setNumDays, endDate, onNext }) {
+function DatesStep({ startDate, onStartDateChange, endDate, onNext }) {
   return (
     <div className="space-y-8">
-      <div className="grid grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
-          <label className="text-xs uppercase tracking-[0.2em] text-slate-500">Start date</label>
-          <input type="date" className="mt-4 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm" value={startDate} onChange={(e) => onStartDateChange(e.target.value)} />
-        </div>
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
-          <label className="text-xs uppercase tracking-[0.2em] text-slate-500">Trip length</label>
-          <div className="mt-4 flex items-center gap-4">
-            <button onClick={() => setNumDays(d => Math.max(1, d - 1))}
-              className="h-9 w-9 rounded-full border border-slate-200 text-xl font-semibold text-slate-600 hover:bg-slate-50 transition flex items-center justify-center">−</button>
-            <span className="text-2xl font-bold text-slate-900 w-8 text-center">{numDays}</span>
-            <button onClick={() => setNumDays(d => d + 1)}
-              className="h-9 w-9 rounded-full border border-slate-200 text-xl font-semibold text-slate-600 hover:bg-slate-50 transition flex items-center justify-center">+</button>
-            <span className="text-sm text-slate-500">{numDays === 1 ? "day" : "days"}</span>
-          </div>
-        </div>
+      <div className="rounded-2xl bg-white p-6 shadow-sm max-w-sm">
+        <label className="text-xs uppercase tracking-[0.2em] text-slate-500">Start date</label>
+        <input type="date" className="mt-4 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm" value={startDate} onChange={(e) => onStartDateChange(e.target.value)} />
       </div>
       {startDate && endDate && (
-        <div className="rounded-2xl border border-slate-100 bg-slate-50 px-5 py-4 flex gap-8 text-sm">
+        <div className="rounded-2xl border border-slate-100 bg-slate-50 px-5 py-4 flex gap-8 text-sm max-w-sm">
           <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Return date</p><p className="mt-1 font-semibold text-slate-900">{endDate}</p></div>
-          <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Nights out</p><p className="mt-1 font-semibold text-slate-900">{numDays - 1}</p></div>
         </div>
       )}
-      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 text-sm text-emerald-800">Trips must begin within 10 days for the most accurate NOAA forecasts.</div>
+      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 text-sm text-emerald-800 max-w-sm">Trips must begin within 10 days for the most accurate NOAA forecasts.</div>
       <button onClick={onNext} disabled={!startDate}
         className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
-        Continue to trail match
+        Continue to itinerary
       </button>
     </div>
   );
@@ -411,8 +437,11 @@ function MatchStep({ route, trailMatch, selectedTrailId, onTrailSelect, onNext, 
   );
 }
 
-function ItineraryStep({ route, selectedTrail, numDays, setNumDays, tripType, setTripType, onNext }) {
-  const rawMiles = parseFloat(route?.distance_mi || selectedTrail?.length_miles || 0);
+function ItineraryStep({ route, selectedTrail, startDate, numDays, setNumDays, tripType, setTripType, onNext }) {
+  const [aiBriefing, setAiBriefing] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const rawMiles = parseFloat(route?.length_miles || route?.distance_mi || selectedTrail?.length_miles || 0);
   const effectiveMiles = tripType === "out-and-back" ? rawMiles * 2 : rawMiles;
   const milesPerDay = numDays > 0 && effectiveMiles > 0 ? effectiveMiles / numDays : 0;
 
@@ -422,6 +451,30 @@ function ItineraryStep({ route, selectedTrail, numDays, setNumDays, tripType, se
     endMile: +((i + 1) * milesPerDay).toFixed(1),
     miles: +milesPerDay.toFixed(1),
   }));
+
+  const fetchAiBriefing = async () => {
+    if (!selectedTrail && !route) return;
+    setAiLoading(true);
+    setAiBriefing(null);
+    try {
+      const res = await fetch("/api/plan/itinerary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trail_name: selectedTrail?.name || "Custom route",
+          area: selectedTrail?.area || "",
+          total_miles: effectiveMiles,
+          trip_type: tripType,
+          num_days: numDays,
+          days,
+          checks: {},
+        }),
+      });
+      const data = await res.json();
+      setAiBriefing(data);
+    } catch { setAiBriefing({ error: "Could not reach AI" }); }
+    setAiLoading(false);
+  };
 
   const btnBase = "rounded-full px-5 py-2 text-sm font-semibold transition";
   const btnActive = "bg-emerald-600 text-white";
@@ -461,6 +514,7 @@ function ItineraryStep({ route, selectedTrail, numDays, setNumDays, tripType, se
             <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Total</p><p className="mt-1 font-semibold text-slate-900">{effectiveMiles.toFixed(1)} mi</p></div>
             <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Per day</p><p className="mt-1 font-semibold text-slate-900">~{milesPerDay.toFixed(1)} mi</p></div>
             <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Days</p><p className="mt-1 font-semibold text-slate-900">{numDays}</p></div>
+            {startDate && <div><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Start</p><p className="mt-1 font-semibold text-slate-900">{startDate}</p></div>}
           </div>
         )}
       </div>
@@ -481,6 +535,29 @@ function ItineraryStep({ route, selectedTrail, numDays, setNumDays, tripType, se
           ))}
         </div>
       )}
+
+      {/* AI Briefing */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">AI trip briefing</p>
+          <button onClick={fetchAiBriefing} disabled={aiLoading}
+            className="rounded-full border border-emerald-300 px-4 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition disabled:opacity-50">
+            {aiLoading ? "Generating…" : aiBriefing ? "Regenerate" : "Generate"}
+          </button>
+        </div>
+        {aiLoading && (
+          <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner /> Asking AI for a trip briefing…</div>
+        )}
+        {aiBriefing?.error && !aiLoading && (
+          <p className="text-sm text-red-500">{aiBriefing.error}</p>
+        )}
+        {aiBriefing?.text && !aiLoading && (
+          <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{aiBriefing.text}</p>
+        )}
+        {!aiBriefing && !aiLoading && (
+          <p className="text-sm text-slate-400">Hit Generate for an AI day-by-day trail briefing.</p>
+        )}
+      </div>
 
       <p className="text-xs text-slate-400">Camp markers are draggable on the report map.</p>
 
@@ -552,13 +629,18 @@ function ChecksStep({ checks, checksLoading, onNext }) {
 
 // ─── Map components ───────────────────────────────────────────────────────────
 
-function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, heightClass, mapStyle, darkMode = false }) {
+function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, heightClass, onCampPositionsChange }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const campMarkersRef = useRef([]);
   const userWaterMarkersRef = useRef([]);
   const fireCount = getFireCount(firePerimeters);
-  const styleUrl = mapStyle || (darkMode ? "mapbox://styles/mapbox/dark-v11" : "mapbox://styles/mapbox/outdoors-v12");
+  const styleUrl = "mapbox://styles/mapbox/outdoors-v12";
+  // Keep mutable values in refs so map callbacks don't go stale
+  const addWaterModeRef = useRef(addWaterMode);
+  const onAddWaterSpotRef = useRef(onAddWaterSpot);
+  useEffect(() => { addWaterModeRef.current = addWaterMode; }, [addWaterMode]);
+  useEffect(() => { onAddWaterSpotRef.current = onAddWaterSpot; }, [onAddWaterSpot]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -632,6 +714,15 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
           new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(`<strong>${p.name}</strong><br/>${p.water_type} · ${p.distance_mi} mi from trail`).addTo(map);
         });
       }
+
+      // Water-spot click handler — uses refs so closure is never stale
+      if (!exploreMode) {
+        map.on("click", (e) => {
+          if (addWaterModeRef.current && onAddWaterSpotRef.current) {
+            onAddWaterSpotRef.current({ lat: e.lngLat.lat, lng: e.lngLat.lng, name: "Water source" });
+          }
+        });
+      }
     });
 
     return () => { map.remove(); mapRef.current = null; };
@@ -653,9 +744,22 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
     campMarkersRef.current.forEach(m => m.remove());
     campMarkersRef.current = [];
     const camps = itineraryDays.slice(0, -1);
+    // Compute actual one-way route length from geometry so mirroring is accurate
+    let onewayLen = rawMiles || 0;
+    if (tripType === "out-and-back" && routePoints.length > 1) {
+      let d = 0;
+      for (let i = 1; i < routePoints.length; i++)
+        d += haversineMiles(routePoints[i-1].lat, routePoints[i-1].lng, routePoints[i].lat, routePoints[i].lng);
+      onewayLen = d;
+    }
     const addMarkers = () => {
       camps.forEach((day) => {
-        const pt = getPointAtMile(routePoints, day.endMile);
+        let targetMile = day.endMile;
+        // For out-and-back, mirror return-leg positions back onto the outbound route
+        if (tripType === "out-and-back" && onewayLen > 0 && targetMile > onewayLen) {
+          targetMile = 2 * onewayLen - targetMile;
+        }
+        const pt = getPointAtMile(routePoints, Math.max(0, targetMile));
         if (!pt) return;
         const el = document.createElement("div");
         el.style.cssText = "width:26px;height:26px;background:#10b981;border:2.5px solid #065f46;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:white;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.3);user-select:none;";
@@ -696,15 +800,6 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
     if (map.isStyleLoaded()) addUserMarkers(); else map.once("load", addUserMarkers);
     return () => { userWaterMarkersRef.current.forEach(m => m.remove()); userWaterMarkersRef.current = []; map.off("load", addUserMarkers); };
   }, [userWaterSpots]);
-
-  // Click handler for adding user water spots
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !onAddWaterSpot) return;
-    const handleClick = (e) => { if (addWaterMode) onAddWaterSpot({ lat: e.lngLat.lat, lng: e.lngLat.lng, name: "Water source" }); };
-    map.on("click", handleClick);
-    return () => map.off("click", handleClick);
-  }, [addWaterMode, onAddWaterSpot]);
 
   // Crosshair cursor in add-water mode
   useEffect(() => {
@@ -822,7 +917,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   );
 }
 
-function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, isDark }) {
+function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, isDark }) {
   const route = planResult?.route;
   const mapLayers = planResult?.map_layers;
   const checks = planResult?.checks;
@@ -830,8 +925,14 @@ function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, use
   const firePerimeters = mapLayers?.fire_perimeters || checks?.fire?.perimeters || null;
   const snowGeojson = checks?.snow?.geojson || null;
   const waterGeojson = checks?.water?.geojson || null;
-  const routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
   const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
+
+  // Build route feature; for out-and-back with dense GPS data, append reversed coords
+  let routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
+  if (tripType === "out-and-back" && routeFeature?.geometry?.coordinates?.length >= 10) {
+    const fwd = routeFeature.geometry.coordinates;
+    routeFeature = { ...routeFeature, geometry: { type: "LineString", coordinates: [...fwd, ...[...fwd].reverse().slice(1)] } };
+  }
   const daytimePeriods = getDaytimePeriods(checks?.weather?.forecast);
   const risk = planResult?.risk || computeRisk(checks || {});
 
@@ -854,12 +955,13 @@ function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, use
         exploreMode={false}
         itineraryDays={itineraryDays}
         routePoints={routePoints}
+        tripType={tripType}
+        rawMiles={rawMiles}
         userWaterSpots={userWaterSpots}
         onAddWaterSpot={onAddWaterSpot}
         addWaterMode={addWaterMode}
         setAddWaterMode={setAddWaterMode}
         heightClass="h-[58vh]"
-        darkMode={isDark}
       />
 
       <div className="bg-[#f6f3ee] border-t border-slate-200">
@@ -942,8 +1044,8 @@ function DashboardView({ onNewPlan, onExplore, isDark }) {
   const sessions = []; // placeholder — will be populated from DB
 
   return (
-    <div className={`min-h-screen ${isDark ? "bg-slate-950 text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
-      <header className={`border-b sticky top-0 z-30 backdrop-blur ${isDark ? "border-slate-900 bg-slate-950/90" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
+    <div className={`min-h-screen ${isDark ? "bg-black text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
+      <header className={`border-b sticky top-0 z-30 backdrop-blur ${isDark ? "border-neutral-800 bg-black/90" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-5 sm:px-8 lg:px-12 flex items-center justify-between">
           <div>
             <p className={`text-xs uppercase tracking-[0.5em] ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>Backcountry</p>
@@ -1064,8 +1166,8 @@ function ExploreView({ onBack, isDark }) {
 
   if (step === "map") {
     return (
-      <div className={`min-h-screen ${isDark ? "bg-slate-950 text-slate-100" : "bg-slate-900 text-white"}`}>
-        <div className={`sticky top-0 z-30 border-b backdrop-blur px-6 py-3 flex items-center justify-between ${isDark ? "border-slate-800 bg-slate-950/95" : "border-white/10 bg-slate-900/95"}`}>
+      <div className={`min-h-screen ${isDark ? "bg-black text-slate-100" : "bg-slate-900 text-white"}`}>
+        <div className={`sticky top-0 z-30 border-b backdrop-blur px-6 py-3 flex items-center justify-between ${isDark ? "border-neutral-800 bg-black/95" : "border-white/10 bg-slate-900/95"}`}>
           <BackBtn label="← Dashboard" onClick={onBack} />
           <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Explore — {selectedTrail?.name || "Custom GPX"}</p>
           <button onClick={() => setStep("search")} className="text-xs uppercase tracking-[0.3em] text-slate-400 hover:text-white transition">← Search</button>
@@ -1078,15 +1180,14 @@ function ExploreView({ onBack, isDark }) {
           selectedTrail={selectedTrail}
           route={gpxRoute}
           exploreMode={true}
-          darkMode={isDark}
         />
       </div>
     );
   }
 
   return (
-    <div className={`min-h-screen ${isDark ? "bg-slate-950 text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
-      <header className={`sticky top-0 z-30 border-b backdrop-blur ${isDark ? "border-slate-900 bg-slate-950/95" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
+    <div className={`min-h-screen ${isDark ? "bg-black text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
+      <header className={`sticky top-0 z-30 border-b backdrop-blur ${isDark ? "border-neutral-800 bg-black/95" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-4 sm:px-8 lg:px-12 flex items-center gap-6">
           <BackBtn label="← Dashboard" onClick={onBack} />
           <div>
@@ -1170,7 +1271,7 @@ export function PlanView({ onBack, isDark }) {
 
   // Derived values
   const endDate = addDays(startDate, numDays);
-  const rawMiles = parseFloat(gpxRoute?.distance_mi || selectedTrail?.length_miles || 0);
+  const rawMiles = parseFloat(gpxRoute?.length_miles || gpxRoute?.distance_mi || selectedTrail?.length_miles || 0);
   const effectiveMiles = tripType === "out-and-back" ? rawMiles * 2 : rawMiles;
   const milesPerDay = numDays > 0 && effectiveMiles > 0 ? effectiveMiles / numDays : 0;
   const itineraryDays = Array.from({ length: numDays }, (_, i) => ({
@@ -1190,16 +1291,28 @@ export function PlanView({ onBack, isDark }) {
     if (!selectedFile) return;
     const formData = new FormData();
     formData.append("file", selectedFile);
+    setLoading(true);
     try {
       const res = await fetch("/api/route/parse", { method: "POST", body: formData });
       const data = await res.json();
       if (data.route) {
         setRoute(data.route);
         setGpxRoute(data.route);
-        // Pre-fill trip type from trail data if available
-        goTo("dates");
+        // Immediately run trail match from GPX
+        try {
+          const mr = await fetch("/api/trail/match", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ route: data.route, name_hint: "" }),
+          });
+          const md = await mr.json();
+          setTrailMatch(md);
+          if (md.auto_selected) { setSelectedTrailId(md.auto_selected.id); setSelectedTrail(md.auto_selected); }
+        } catch { /* best-effort */ }
+        goTo("match");
       } else alert(data.detail || "Failed to parse route");
     } catch (err) { alert("Error uploading: " + err.message); }
+    setLoading(false);
   };
 
   const handleNameSearch = async () => {
@@ -1217,7 +1330,7 @@ export function PlanView({ onBack, isDark }) {
         setSelectedTrailId(data.auto_selected.id);
         setSelectedTrail(data.auto_selected);
         setTrailMatch({ auto_selected: data.auto_selected, shortlist: data.shortlist || [data.auto_selected] });
-        goTo("dates");
+        goTo("match");
       } else if (data.shortlist?.length) {
         setNameSearchResults(data.shortlist);
       }
@@ -1229,7 +1342,7 @@ export function PlanView({ onBack, isDark }) {
     setTrailName(trail.name);
     setSelectedTrail(trail);
     setNameSearchResults([]);
-    goTo("dates");
+    goTo("match");
     try {
       const res = await fetch("/api/trail/match", {
         method: "POST",
@@ -1240,41 +1353,23 @@ export function PlanView({ onBack, isDark }) {
       const full = data.shortlist?.find((t) => t.id === trail.id) || data.auto_selected || trail;
       setTrailMatch({ auto_selected: full, shortlist: data.shortlist || [full] });
       setSelectedTrail(full);
-      // Auto-detect route type from trail data
       if (full.route_type) setTripType(full.route_type === "loop" ? "loop" : "out-and-back");
     } catch { setTrailMatch({ auto_selected: trail, shortlist: [trail] }); }
   };
 
   // ── Dates handler ──
 
-  const handleDatesNext = async () => {
-    if (!gpxRoute && selectedTrailId) { goTo("match"); return; }
-    if (gpxRoute) {
-      setLoading(true);
-      try {
-        const res = await fetch("/api/trail/match", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ route: gpxRoute, name_hint: "" }),
-        });
-        const data = await res.json();
-        setTrailMatch(data);
-        if (data.auto_selected) setSelectedTrailId(data.auto_selected.id);
-      } catch { /* ignore */ }
-      setLoading(false);
-      goTo("match");
-    }
-  };
+  const handleDatesNext = () => goTo("itinerary");
 
   // ── Match handlers ──
 
-  const handleMatchNext = () => { goTo("itinerary"); };
+  const handleMatchNext = () => { goTo("dates"); };
 
   const handleUseCustomGpx = () => {
     setUseCustomGpx(true);
     setSelectedTrail(null);
     setSelectedTrailId(null);
-    goTo("itinerary");
+    goTo("dates");
   };
 
   // ── Checks ──
@@ -1300,9 +1395,7 @@ export function PlanView({ onBack, isDark }) {
       return result;
     };
 
-    const sampleRoutePoints = routePoints?.length
-      ? routePoints.filter((_, i) => i % Math.max(1, Math.floor(routePoints.length / 20)) === 0).slice(0, 20)
-      : null;
+    const sampleRoutePoints = routePoints?.length ? interpolateRoutePoints(routePoints, 12) : null;
 
     const [weather, aqi, fire, snow, water] = await Promise.all([
       runCheck("weather", "/api/checks/weather", payload),
@@ -1333,8 +1426,8 @@ export function PlanView({ onBack, isDark }) {
   const isReportStep = activeStep === "report";
 
   return (
-    <div className={`min-h-screen ${isDark ? "bg-slate-950 text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
-      <header className={`sticky top-0 z-30 border-b backdrop-blur ${isDark ? "border-slate-900 bg-slate-950/95" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
+    <div className={`min-h-screen ${isDark ? "bg-black text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
+      <header className={`sticky top-0 z-30 border-b backdrop-blur ${isDark ? "border-neutral-800 bg-black/95" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-4 sm:px-8 lg:px-12">
           <div className="flex items-center justify-between gap-6">
             <div className="flex items-center gap-5">
@@ -1369,6 +1462,8 @@ export function PlanView({ onBack, isDark }) {
           selectedTrail={selectedTrail}
           itineraryDays={itineraryDays}
           routePoints={routePoints}
+          tripType={tripType}
+          rawMiles={rawMiles}
           userWaterSpots={userWaterSpots}
           onAddWaterSpot={(spot) => setUserWaterSpots(prev => [...prev, spot])}
           addWaterMode={addWaterMode}
@@ -1399,7 +1494,7 @@ export function PlanView({ onBack, isDark }) {
               </div>
             )}
             {activeStep === "dates" && (
-              <DatesStep startDate={startDate} onStartDateChange={setStartDate} numDays={numDays} setNumDays={setNumDays} endDate={endDate} onNext={handleDatesNext} />
+              <DatesStep startDate={startDate} onStartDateChange={setStartDate} endDate={endDate} onNext={handleDatesNext} />
             )}
             {activeStep === "match" && (
               <MatchStep
@@ -1413,6 +1508,7 @@ export function PlanView({ onBack, isDark }) {
               <ItineraryStep
                 route={useCustomGpx ? gpxRoute : (gpxRoute || null)}
                 selectedTrail={useCustomGpx ? null : selectedTrail}
+                startDate={startDate}
                 numDays={numDays} setNumDays={setNumDays}
                 tripType={tripType} setTripType={setTripType}
                 onNext={() => { goTo("checks"); runPreTripChecks(); }}

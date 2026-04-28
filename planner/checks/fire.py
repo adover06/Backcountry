@@ -34,6 +34,24 @@ def _days_ago(epoch_ms: int) -> int:
     return (datetime.now(timezone.utc) - ts).days
 
 
+def _poly_centroid(geom: dict) -> tuple[float, float] | None:
+    """Rough centroid from bounding box of first ring."""
+    geom_type = geom.get("type")
+    coords = geom.get("coordinates")
+    ring = None
+    if geom_type == "Polygon" and coords and coords[0]:
+        ring = coords[0]
+    elif geom_type == "MultiPolygon" and coords and coords[0] and coords[0][0]:
+        ring = coords[0][0]
+    if not ring:
+        return None
+    lngs = [pt[0] for pt in ring if len(pt) >= 2]
+    lats = [pt[1] for pt in ring if len(pt) >= 2]
+    if not lats:
+        return None
+    return (sum(lats) / len(lats), sum(lngs) / len(lngs))
+
+
 def get_fire_summary(route: dict, radius_miles: float = 50.0) -> dict:
     lat = lng = None
     route_midpoint = route.get("midpoint")
@@ -61,21 +79,11 @@ def get_fire_summary(route: dict, radius_miles: float = 50.0) -> dict:
             props = feat.get("properties") or {}
             geom = feat.get("geometry")
 
+            dist = None
             if lat and lng and geom:
-                geom_type = geom.get("type")
-                coords = geom.get("coordinates")
-                feat_lat = feat_lng = None
-                if geom_type == "Polygon" and coords and coords[0]:
-                    pt = coords[0][0]
-                    if len(pt) >= 2:
-                        feat_lng, feat_lat = pt[0], pt[1]
-                elif geom_type == "MultiPolygon" and coords and coords[0] and coords[0][0]:
-                    pt = coords[0][0][0]
-                    if len(pt) >= 2:
-                        feat_lng, feat_lat = pt[0], pt[1]
-
-                if feat_lat is not None:
-                    dist = _distance_miles(lat, lng, feat_lat, feat_lng)
+                centroid = _poly_centroid(geom)
+                if centroid:
+                    dist = _distance_miles(lat, lng, centroid[0], centroid[1])
                     if dist > radius_miles:
                         continue
 
@@ -91,6 +99,8 @@ def get_fire_summary(route: dict, radius_miles: float = 50.0) -> dict:
                     tag = "older"
                 props["recency_tag"] = tag
                 props["days_since_update"] = days
+                if dist is not None:
+                    props["distance_from_midpoint_mi"] = round(dist, 1)
                 feat["properties"] = props
                 filtered_features.append(feat)
 
