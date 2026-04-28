@@ -9,13 +9,16 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+import requests as _requests
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from planner.route_parser import parse_gpx_bytes
-from planner.trail_matcher import match_trail
+from planner.trail_matcher import match_trail, suggest_trails
 from planner.checks.weather import get_weather_summary
 from planner.checks.aqi import get_aqi_summary
 from planner.checks.fire import get_fire_summary
@@ -35,6 +38,14 @@ async def parse_route(file: UploadFile = File(...)):
     data = await file.read()
     route = parse_gpx_bytes(data)
     return {"route": route}
+
+
+@router.get("/api/trail/suggest")
+async def trail_suggest(q: str = ""):
+    """Lightweight typeahead: returns up to 8 trail name+area+id matches for query string `q`."""
+    if not q or not q.strip():
+        return []
+    return suggest_trails(q.strip(), limit=8)
 
 
 @router.post("/api/trail/match")
@@ -165,3 +176,33 @@ async def plan_trip(
         "report": report,
         "map_layers": map_layers,
     }
+
+
+NOHRSC_WMS = "https://mapservices.weather.noaa.gov/raster/services/snow/NOHRSC_Snow_Analysis/MapServer/WMSServer"
+
+@router.get("/api/proxy/snow")
+async def proxy_snow_tile(bbox: str, width: int = 256, height: int = 256):
+    """Proxy NOHRSC WMS tiles to avoid browser CORS restrictions."""
+    params = {
+        "SERVICE": "WMS",
+        "VERSION": "1.1.1",
+        "REQUEST": "GetMap",
+        "LAYERS": "0",
+        "STYLES": "",
+        "FORMAT": "image/png",
+        "TRANSPARENT": "TRUE",
+        "SRS": "EPSG:3857",
+        "BBOX": bbox,
+        "WIDTH": width,
+        "HEIGHT": height,
+    }
+    try:
+        r = _requests.get(NOHRSC_WMS, params=params, timeout=10, headers={"User-Agent": "BackcountryPlanner/1.0"})
+        r.raise_for_status()
+        return Response(
+            content=r.content,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+    except Exception:
+        return Response(content=b"", media_type="image/png", status_code=204)

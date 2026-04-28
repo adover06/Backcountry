@@ -105,14 +105,87 @@ function Stepper({ activeStep, onSelect }) {
   );
 }
 
-function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputMode, setInputMode, trailName, setTrailName, onNameSearch, onModeChange }) {
+function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputMode, setInputMode, trailName, setTrailName, onNameSearch, onModeChange, onSuggestionSelect }) {
   const isGpxMode = inputMode === "gpx";
-  
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState(-1);
+  const debounceRef = useRef(null);
+  const dropdownRef = useRef(null);
+
   const handleModeChange = (mode) => {
     setInputMode(mode);
+    setSuggestions([]);
+    setShowDropdown(false);
     if (onModeChange) onModeChange(mode);
   };
-  
+
+  // Debounced fetch of suggestions as user types
+  const handleNameInput = (e) => {
+    const val = e.target.value;
+    setTrailName(val);
+    setActiveSuggestionIdx(-1);
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (!val.trim() || val.trim().length < 2) {
+      setSuggestions([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      setSuggestLoading(true);
+      try {
+        const res = await fetch(`/api/trail/suggest?q=${encodeURIComponent(val.trim())}`);
+        const data = await res.json();
+        setSuggestions(Array.isArray(data) ? data : []);
+        setShowDropdown(Array.isArray(data) && data.length > 0);
+      } catch {
+        setSuggestions([]);
+        setShowDropdown(false);
+      } finally {
+        setSuggestLoading(false);
+      }
+    }, 300);
+  };
+
+  const handleSuggestionClick = (trail) => {
+    setSuggestions([]);
+    setShowDropdown(false);
+    setActiveSuggestionIdx(-1);
+    if (onSuggestionSelect) onSuggestionSelect(trail);
+  };
+
+  // Keyboard navigation in the dropdown
+  const handleKeyDown = (e) => {
+    if (!showDropdown || suggestions.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveSuggestionIdx((prev) => Math.min(prev + 1, suggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveSuggestionIdx((prev) => Math.max(prev - 1, -1));
+    } else if (e.key === "Enter" && activeSuggestionIdx >= 0) {
+      e.preventDefault();
+      handleSuggestionClick(suggestions[activeSuggestionIdx]);
+    } else if (e.key === "Escape") {
+      setShowDropdown(false);
+    }
+  };
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   return (
     <div className="space-y-8">
       <div className="flex gap-4 p-1 bg-slate-100 rounded-xl w-fit">
@@ -123,7 +196,7 @@ function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputM
           Name + Region
         </button>
       </div>
-      
+
       <div className="rounded-[32px] border border-emerald-100 bg-gradient-to-br from-white via-white to-emerald-50/40 p-10 shadow-lg shadow-emerald-200/30">
         {isGpxMode ? (
           <>
@@ -151,17 +224,58 @@ function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputM
               <div>
                 <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">Trail Search</p>
                 <h3 className="mt-3 text-2xl font-semibold text-slate-900">Search by name</h3>
-                <p className="mt-2 text-sm text-slate-600">Enter trail name and region to find matching trails.</p>
+                <p className="mt-2 text-sm text-slate-600">Start typing to see matching trails, or hit Search to browse all results.</p>
               </div>
             </div>
             <div className="mt-8 space-y-4">
-              <input
-                type="text"
-                value={trailName}
-                onChange={(e) => setTrailName(e.target.value)}
-                placeholder="e.g., Aloha Lake, Desolation Wilderness"
-                className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm"
-              />
+              {/* Input + suggestions wrapper */}
+              <div className="relative" ref={dropdownRef}>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={trailName}
+                    onChange={handleNameInput}
+                    onKeyDown={handleKeyDown}
+                    onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
+                    placeholder="e.g., Aloha Lake, Desolation Wilderness"
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm pr-10 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                    autoComplete="off"
+                  />
+                  {suggestLoading && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <svg className="h-4 w-4 animate-spin text-emerald-500" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                    </span>
+                  )}
+                </div>
+
+                {/* Suggestions dropdown */}
+                {showDropdown && suggestions.length > 0 && (
+                  <ul className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60">
+                    {suggestions.map((trail, idx) => (
+                      <li
+                        key={trail.id}
+                        onMouseDown={(e) => { e.preventDefault(); handleSuggestionClick(trail); }}
+                        onMouseEnter={() => setActiveSuggestionIdx(idx)}
+                        className={`flex cursor-pointer items-start gap-3 px-4 py-3 transition ${idx === activeSuggestionIdx ? "bg-emerald-50" : "hover:bg-slate-50"} ${idx < suggestions.length - 1 ? "border-b border-slate-100" : ""}`}
+                      >
+                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-700">
+                          {idx + 1}
+                        </span>
+                        <span className="flex-1 min-w-0">
+                          <span className="block truncate text-sm font-semibold text-slate-900">{trail.name}</span>
+                          <span className="block truncate text-xs text-slate-500">
+                            {trail.area}{trail.length_miles ? ` · ${trail.length_miles} mi` : ""}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
               <button onClick={onNameSearch} disabled={!trailName.trim()} className="w-full rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
                 Search Trails
               </button>
@@ -235,26 +349,27 @@ function MatchStep({ route, trailMatch, selectedTrailId, onTrailSelect, onNext, 
   );
 }
 
-function ChecksStep({ checks, loading, onNext }) {
-  if (!checks && !loading) {
-    return (
-      <div className="space-y-8">
-        <div className="rounded-2xl bg-white p-6 shadow-sm text-center py-12">
-          <p className="text-slate-500">Loading pre-trip checks...</p>
-        </div>
-      </div>
-    );
-  }
-  
+function Spinner() {
+  return (
+    <svg className="h-4 w-4 animate-spin text-slate-400" viewBox="0 0 24 24" fill="none">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+    </svg>
+  );
+}
+
+function ChecksStep({ checks, checksLoading, onNext }) {
+  const anyLoading = checksLoading && Object.values(checksLoading).some(Boolean);
+
   const checkItems = [
-    { label: "Weather", data: checks?.weather },
-    { label: "AQI", data: checks?.aqi },
-    { label: "Fire", data: checks?.fire },
-    { label: "Snow", data: checks?.snow },
+    { key: "weather", label: "Weather" },
+    { key: "aqi",     label: "AQI" },
+    { key: "fire",    label: "Fire" },
+    { key: "snow",    label: "Snow" },
   ];
 
   const getSummary = (label, data) => {
-    if (!data) return "Loading...";
+    if (!data) return null;
     if (data.error) return data.error;
     if (label === "Weather" && data.forecast?.length) {
       const next = data.forecast[0];
@@ -267,38 +382,137 @@ function ChecksStep({ checks, loading, onNext }) {
     if (label === "Fire" && data.perimeters?.features) {
       return `${data.perimeters.features.length} fire perimeters loaded`;
     }
-    if (label === "Snow" && data.image_url) {
-      return "Latest NOHRSC snow depth image available.";
-    }
     if (label === "Snow" && data.provider === "Open-Meteo") {
       return `${data.message} Max depth: ${data.max_depth_in ?? "--"} in · Max snowfall: ${data.max_snowfall_in ?? "--"} in`;
     }
-    if (label === "Snow" && data.message) {
-      return data.message;
-    }
-    return "Loading...";
+    if (label === "Snow" && data.message) return data.message;
+    return null;
   };
-  
+
   return (
     <div className="space-y-8">
       <div className="grid gap-4 md:grid-cols-2">
-        {checkItems.map(({ label, data }) => {
-          const status = data?.overall_status || (data?.error ? "Attention" : "Good");
-          const statusClass = status === "Good" ? "bg-emerald-50 text-emerald-700" : status === "Caution" ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-700";
+        {checkItems.map(({ key, label }) => {
+          const isLoading = checksLoading?.[key];
+          const data = checks?.[key];
+          const summary = getSummary(label, data);
+          const status = isLoading ? null : (data?.error ? "Attention" : data ? "Good" : null);
+          const statusClass = status === "Good" ? "bg-emerald-50 text-emerald-700" : status === "Attention" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700";
+
           return (
-            <div key={label} className="rounded-2xl bg-white p-6 shadow-sm">
+            <div key={key} className="rounded-2xl bg-white p-6 shadow-sm transition-all">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold text-slate-900">{label}</p>
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass}`}>{status}</span>
+                {isLoading ? (
+                  <span className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
+                    <Spinner /> Fetching
+                  </span>
+                ) : status ? (
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass}`}>{status}</span>
+                ) : null}
               </div>
-              <p className="mt-3 text-sm text-slate-600">{getSummary(label, data)}</p>
+              <p className="mt-3 text-sm text-slate-600">{isLoading ? "" : (summary ?? "—")}</p>
             </div>
           );
         })}
       </div>
-      <button onClick={onNext} disabled={loading} className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
-        {loading ? "Generating report..." : "View trip report"}
+      <button onClick={onNext} disabled={anyLoading} className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:opacity-50">
+        {anyLoading ? "Running checks…" : "View trip report"}
       </button>
+    </div>
+  );
+}
+
+function haversineMiles(lat1, lng1, lat2, lng2) {
+  const R = 3958.8; // Earth radius in miles
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function ElevationProfile({ route }) {
+  if (!route?.points?.length) return null;
+
+  // Filter to points that have elevation data
+  const pts = route.points.filter((p) => p.ele != null);
+  if (pts.length < 2) return null;
+
+  // Build (distanceMi, elevFt) pairs
+  const data = [];
+  let cumDist = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (i > 0) {
+      cumDist += haversineMiles(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
+    }
+    data.push({ dist: cumDist, elev: pts[i].ele * 3.28084 });
+  }
+
+  const totalMi = data[data.length - 1].dist;
+  const elevs = data.map((d) => d.elev);
+  const minElev = Math.min(...elevs);
+  const maxElev = Math.max(...elevs);
+  const elevRange = maxElev - minElev || 1;
+
+  // SVG dimensions (logical units)
+  const W = 460;
+  const H = 80;
+  const padL = 4;
+  const padR = 4;
+  const padT = 6;
+  const padB = 4;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+
+  const xScale = (dist) => padL + (dist / totalMi) * chartW;
+  const yScale = (elev) => padT + chartH - ((elev - minElev) / elevRange) * chartH;
+
+  // Build SVG path: area fill + line
+  const linePoints = data.map((d) => `${xScale(d.dist).toFixed(1)},${yScale(d.elev).toFixed(1)}`).join(" L ");
+  const areaPath = `M ${xScale(0)},${(padT + chartH).toFixed(1)} L ${linePoints} L ${xScale(totalMi)},${(padT + chartH).toFixed(1)} Z`;
+  const linePath = `M ${linePoints}`;
+
+  const fmtElev = (e) => `${Math.round(e).toLocaleString()} ft`;
+  const fmtDist = (d) => `${d.toFixed(1)} mi`;
+
+  return (
+    <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 w-[500px] rounded-3xl border border-white/30 bg-white/90 p-4 shadow-2xl backdrop-blur">
+      <p className="mb-2 text-[10px] uppercase tracking-[0.35em] text-slate-500">Elevation Profile</p>
+      <div className="relative">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 80 }} preserveAspectRatio="none">
+          {/* Gradient fill */}
+          <defs>
+            <linearGradient id="elev-grad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0.05" />
+            </linearGradient>
+          </defs>
+          {/* Area fill */}
+          <path d={areaPath} fill="url(#elev-grad)" />
+          {/* Profile line */}
+          <path d={linePath} fill="none" stroke="#059669" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+        {/* Y-axis labels — positioned over the SVG */}
+        <span className="absolute left-1 top-0 text-[9px] font-medium leading-none text-slate-500">
+          {fmtElev(maxElev)}
+        </span>
+        <span className="absolute bottom-0 left-1 text-[9px] font-medium leading-none text-slate-500">
+          {fmtElev(minElev)}
+        </span>
+      </div>
+      {/* X-axis labels */}
+      <div className="mt-0.5 flex justify-between text-[9px] uppercase tracking-[0.2em] text-slate-400">
+        <span>{fmtDist(0)}</span>
+        <span className="text-slate-500 font-medium normal-case tracking-normal text-[9px]">
+          +{Math.round(route.elev_gain_ft ?? 0).toLocaleString()} ft gain
+        </span>
+        <span>{fmtDist(totalMi)}</span>
+      </div>
     </div>
   );
 }
@@ -473,31 +687,46 @@ function ReportStep({ planResult, selectedTrail }) {
         });
       }
 
-      // NOHRSC snow depth raster — free NOAA WMS, no key required, shows current snowpack
-      map.addSource("snow-raster", {
-        type: "raster",
-        tiles: [
-          "https://idpgis.ncep.noaa.gov/arcgis/services/NWS_Observations/NOHRSC_Snow_Analysis/MapServer/WmsServer?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=0&STYLES=&FORMAT=image%2Fpng&TRANSPARENT=TRUE&SRS=EPSG%3A3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256",
-        ],
-        tileSize: 256,
-        attribution: "NOHRSC / NOAA",
-      });
-      map.addLayer({
-        id: "snow-depth",
-        type: "raster",
-        source: "snow-raster",
-        paint: { "raster-opacity": 0.65 },
-      });
-
-      if (map.getLayer("route-glow")) map.moveLayer("route-glow", "snow-depth");
-      if (map.getLayer("route-line")) map.moveLayer("route-line", "snow-depth");
+      if (snowGeojson) {
+        map.addSource("snow", { type: "geojson", data: snowGeojson });
+        map.addLayer({
+          id: "snow-point",
+          type: "circle",
+          source: "snow",
+          paint: {
+            "circle-radius": 10,
+            "circle-color": "#bfdbfe",
+            "circle-opacity": 0.85,
+            "circle-stroke-color": "#3b82f6",
+            "circle-stroke-width": 2,
+          },
+        });
+        map.addLayer({
+          id: "snow-label",
+          type: "symbol",
+          source: "snow",
+          layout: {
+            "text-field": ["concat", ["to-string", ["get", "max_depth_in"]], " in snow"],
+            "text-size": 12,
+            "text-offset": [0, 1.8],
+            "text-anchor": "top",
+          },
+          paint: {
+            "text-color": "#1e3a8a",
+            "text-halo-color": "#eff6ff",
+            "text-halo-width": 2,
+          },
+        });
+        if (map.getLayer("route-glow")) map.moveLayer("route-glow", "snow-label");
+        if (map.getLayer("route-line")) map.moveLayer("route-line", "snow-label");
+      }
     });
 
     return () => {
       map.remove();
       mapRef.current = null;
     };
-  }, [routeFeature, selectedTrail, firePerimeters, fallbackCenter]);
+  }, [routeFeature, selectedTrail, firePerimeters, snowGeojson, fallbackCenter]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -510,7 +739,10 @@ function ReportStep({ planResult, selectedTrail }) {
     if (map.getSource("fire") && firePerimeters) {
       map.getSource("fire").setData(firePerimeters);
     }
-  }, [routeFeature, firePerimeters]);
+    if (map.getSource("snow") && snowGeojson) {
+      map.getSource("snow").setData(snowGeojson);
+    }
+  }, [routeFeature, firePerimeters, snowGeojson]);
   
   return (
     <div className="relative h-[calc(100vh-9.25rem)] min-h-[42rem] overflow-hidden bg-slate-900">
@@ -552,8 +784,8 @@ function ReportStep({ planResult, selectedTrail }) {
           <span className="font-medium text-slate-800">Fire perimeter</span>
         </div>
         <div className="mt-3 flex items-center gap-3">
-          <span className="h-4 w-10 rounded" style={{background: "linear-gradient(to right, #c7e9f7, #5bb8e8, #1a6eab)"}} />
-          <span className="font-medium text-slate-800">Snow depth (NOHRSC)</span>
+          <span className="h-4 w-4 rounded-full border-2 border-blue-500 bg-blue-200" />
+          <span className="font-medium text-slate-800">Snow depth (highest point)</span>
         </div>
       </div>
 
@@ -582,8 +814,33 @@ function ReportStep({ planResult, selectedTrail }) {
           </div>
         </div>
       ) : null}
+
+      <ElevationProfile route={route} />
     </div>
   );
+}
+
+function computeRisk(checks) {
+  let status = "go";
+  const reasons = [];
+  for (const obs of checks.aqi?.observations || []) {
+    if (obs.aqi >= 150) { status = "no-go"; reasons.push(`AQI ${obs.aqi} (${obs.category})`); }
+    else if (obs.aqi >= 100 && status !== "no-go") { status = "caution"; reasons.push(`AQI ${obs.aqi} (${obs.category})`); }
+  }
+  if (checks.fire?.perimeters?.features?.length) {
+    if (status === "go") status = "caution";
+    reasons.push("Active fire perimeters present in region");
+  }
+  const snowDepth = checks.snow?.max_depth_in;
+  if (snowDepth >= 12 && status !== "no-go") { status = "caution"; reasons.push(`Snow depth ~${snowDepth} in`); }
+  return { status, reasons };
+}
+
+function buildReport(trail, risk) {
+  const bullets = [`Status: ${risk.status.toUpperCase()}`];
+  if (trail) bullets.push(`Route: ${trail.name} in ${trail.area}`);
+  for (const r of risk.reasons) bullets.push(r);
+  return { format: "bullets", bullets };
 }
 
 export default function App() {
@@ -603,6 +860,7 @@ export default function App() {
   const [checks, setChecks] = useState(null);
   const [planResult, setPlanResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [checksLoading, setChecksLoading] = useState({ weather: false, aqi: false, fire: false, snow: false });
   const [selectedFile, setSelectedFile] = useState(null);
   const [inputMode, setInputMode] = useState("gpx");
   const [trailName, setTrailName] = useState("");
@@ -707,14 +965,28 @@ export default function App() {
     }
   };
   
-  const handleNameSelect = (trail) => {
+  const handleNameSelect = async (trail) => {
     setSelectedTrailId(trail.id);
     setTrailName(trail.name);
-    setTrailMatch({ auto_selected: trail, shortlist: [trail] });
     setSelectedTrail(trail);
     setNameSearchResults([]);
     addMessage("assistant", `Selected: ${trail.name}. Continue to set your trip dates.`);
     goToStep("dates");
+
+    // Fetch full trail data (includes geometry) in the background
+    try {
+      const res = await fetch("/api/trail/match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ route: { points: [] }, name_hint: trail.name }),
+      });
+      const data = await res.json();
+      const fullTrail = data.shortlist?.find((t) => t.id === trail.id) || data.auto_selected || trail;
+      setTrailMatch({ auto_selected: fullTrail, shortlist: data.shortlist || [fullTrail] });
+      setSelectedTrail(fullTrail);
+    } catch {
+      setTrailMatch({ auto_selected: trail, shortlist: [trail] });
+    }
   };
   
   const handleDatesNext = async () => {
@@ -770,71 +1042,55 @@ export default function App() {
   
   const runPreTripChecks = async () => {
     setLoading(true);
+    setChecks(null);
     addMessage("assistant", "Running pre-trip checks for weather, AQI, fire, and snow...");
-    
+
     try {
-      let data;
-      const hasGPX = selectedFile && gpxRoute; // Must have both file AND parsed route
-      
-      if (hasGPX) {
-        console.log("GPX path: using /api/plan");
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-        formData.append("start_date", startDate);
-        formData.append("end_date", endDate);
-        formData.append("selected_trail_id", selectedTrailId || "");
-        
-        const res = await fetch("/api/plan", { method: "POST", body: formData });
-        data = await res.json();
+      let lat, lng;
+      if (gpxRoute?.midpoint) {
+        [lat, lng] = gpxRoute.midpoint;
       } else if (selectedTrail) {
-        console.log("Name search path: calling checks APIs directly");
-        const trail = selectedTrail;
-        console.log("Trail coords:", trail.lat, trail.lng);
-        const payload = { lat: trail.lat, lng: trail.lng, start_date: startDate, end_date: endDate };
-        const [weatherRes, aqiRes, fireRes, snowRes] = await Promise.all([
-          fetch("/api/checks/weather", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          }),
-          fetch("/api/checks/aqi", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          }),
-          fetch("/api/checks/fire", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...payload, radius: 50.0 }),
-          }),
-          fetch("/api/checks/snow", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...payload, radius: 5.0 }),
-          }),
-        ]);
-        const [weather, aqi, fire, snow] = await Promise.all([
-          weatherRes.json(),
-          aqiRes.json(),
-          fireRes.json(),
-          snowRes.json(),
-        ]);
-        
-        data = {
-          checks: { weather, aqi, fire, snow },
-          risk: { status: "go", reasons: [] },
-        };
+        lat = selectedTrail.lat;
+        lng = selectedTrail.lng;
       } else {
-        console.log("No path: selectedFile=", !!selectedFile, "gpxRoute=", !!gpxRoute, "selectedTrailId=", selectedTrailId, "trailMatch=", !!trailMatch, "selectedTrail=", !!selectedTrail);
-        throw new Error("No trail selected. Please select a trail to run checks or upload a GPX route.");
+        throw new Error("No trail or route available. Please upload a GPX or select a trail first.");
       }
-      
+
+      const payload = { lat, lng, start_date: startDate, end_date: endDate };
+      setChecksLoading({ weather: true, aqi: true, fire: true, snow: true });
+
+      const postJson = (url, body) =>
+        fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+
+      const runCheck = async (key, url, body) => {
+        const result = await postJson(url, body);
+        setChecks((prev) => ({ ...(prev || {}), [key]: result }));
+        setChecksLoading((prev) => ({ ...prev, [key]: false }));
+        return result;
+      };
+
+      const [weather, aqi, fire, snow] = await Promise.all([
+        runCheck("weather", "/api/checks/weather", payload),
+        runCheck("aqi", "/api/checks/aqi", payload),
+        runCheck("fire", "/api/checks/fire", { ...payload, radius: 50.0 }),
+        runCheck("snow", "/api/checks/snow", { ...payload, radius: 5.0 }),
+      ]);
+
+      const allChecks = { weather, aqi, fire, snow };
+      const risk = computeRisk(allChecks);
+      const report = buildReport(selectedTrail, risk);
+      const data = {
+        route: gpxRoute,
+        selected_trail: selectedTrail,
+        checks: allChecks,
+        risk,
+        report,
+        map_layers: { fire_perimeters: fire?.perimeters },
+      };
       setPlanResult(data);
-      setChecks(data.checks);
-      
-      const risk = data.risk?.status || data.risk?.overall;
-      addMessage("assistant", `Pre-trip checks complete. Overall status: ${risk || "Unknown"}`);
+      addMessage("assistant", `Pre-trip checks complete. Status: ${risk.status.toUpperCase()}`);
     } catch (err) {
+      setChecksLoading({ weather: false, aqi: false, fire: false, snow: false });
       addMessage("assistant", "Error running checks: " + err.message);
     }
     setLoading(false);
@@ -849,10 +1105,10 @@ export default function App() {
       case "upload":
         return (
           <>
-            <UploadStep 
-              selectedFile={selectedFile} 
-              fileInputRef={fileInputRef} 
-              onFileChange={handleFileChange} 
+            <UploadStep
+              selectedFile={selectedFile}
+              fileInputRef={fileInputRef}
+              onFileChange={handleFileChange}
               onUpload={handleUpload}
               inputMode={inputMode}
               setInputMode={setInputMode}
@@ -860,6 +1116,7 @@ export default function App() {
               setTrailName={setTrailName}
               onNameSearch={handleNameSearch}
               onModeChange={handleModeChange}
+              onSuggestionSelect={handleNameSelect}
             />
             {nameSearchResults.length > 0 && (
               <div className="grid gap-4 md:grid-cols-3 mt-6">
@@ -879,7 +1136,7 @@ export default function App() {
       case "match":
         return <MatchStep route={gpxRoute} trailMatch={trailMatch} selectedTrailId={selectedTrailId} onTrailSelect={setSelectedTrailId} onNext={handleMatchNext} loading={loading} />;
       case "checks":
-        return <ChecksStep checks={checks} loading={loading} onNext={handleChecksNext} />;
+        return <ChecksStep checks={checks} checksLoading={checksLoading} onNext={handleChecksNext} />;
       case "report":
         return <ReportStep planResult={planResult} selectedTrail={selectedTrail} />;
       default:

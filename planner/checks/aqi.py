@@ -29,26 +29,29 @@ def get_aqi_summary(lat: float, lng: float) -> dict:
     if not api_key:
         return {"error": "AQI unavailable", "observations": []}
 
-    try:
-        url = (
-            "https://www.airnowapi.org/aq/observation/latLong/current/"
-            f"?format=application/json&latitude={lat}&longitude={lng}"
-            f"&distance=25&API_KEY={api_key}"
-        )
-        r = requests.get(url, timeout=8)
-        r.raise_for_status()
-        data = r.json()
-        result = {
-            "observations": [
-                {
-                    "parameter": o.get("ParameterName"),
-                    "aqi": o.get("AQI"),
-                    "category": (o.get("Category") or {}).get("Name"),
-                }
-                for o in data
-            ]
-        }
-        AQI_CACHE.set(cache_key, result)
-        return result
-    except Exception as e:
-        return {"error": str(e), "observations": []}
+    url = (
+        "https://www.airnowapi.org/aq/observation/latLong/current/"
+        f"?format=application/json&latitude={lat}&longitude={lng}"
+        f"&distance=25&API_KEY={api_key}"
+    )
+    last_err = None
+    for attempt in range(2):
+        try:
+            r = requests.get(url, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            result = {
+                "observations": [
+                    {
+                        "parameter": o.get("ParameterName"),
+                        "aqi": o.get("AQI"),
+                        "category": (o.get("Category") or {}).get("Name"),
+                    }
+                    for o in data
+                ]
+            }
+            AQI_CACHE.set(cache_key, result)
+            return result
+        except Exception as e:
+            last_err = e
+    return {"error": str(last_err), "observations": []}

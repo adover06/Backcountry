@@ -13,6 +13,9 @@ from .cache import TTLCache, env_ttl_seconds
 NIFC_PERIMETERS = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/ArcGIS/rest/services/WFIGS_Interagency_Perimeters/FeatureServer/0/query"
 FIRE_FEED_CACHE = TTLCache(ttl_seconds=env_ttl_seconds("FIRE_CACHE_TTL_SECONDS", 21600))
 
+# How far back to include fire perimeters. Default 365 days; set FIRE_HISTORY_DAYS=0 for no limit.
+FIRE_HISTORY_DAYS = int(os.environ.get("FIRE_HISTORY_DAYS", "3650"))
+
 
 def _distance_miles(lat1, lng1, lat2, lng2) -> float:
     r = 3958.8
@@ -78,6 +81,8 @@ def get_fire_summary(route: dict, radius_miles: float = 50.0) -> dict:
 
             days = _days_ago(props.get("Irwin_ModifiedOnDateTime") or props.get("poly_DateCurrent"))
             if days >= 0:
+                if FIRE_HISTORY_DAYS > 0 and days > FIRE_HISTORY_DAYS:
+                    continue
                 if days <= 7:
                     tag = "active"
                 elif days <= 30:
