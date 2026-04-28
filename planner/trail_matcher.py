@@ -4,11 +4,15 @@ Match a GPX route to normalized trail entries from GeoJSON data.
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import List
 
 from rapidfuzz import fuzz
 from data import get_trails
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def _distance_miles(lat1, lng1, lat2, lng2) -> float:

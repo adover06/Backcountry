@@ -466,22 +466,46 @@ export default function App() {
     addMessage("assistant", "Running pre-trip checks for weather, AQI, fire, and snow...");
     
     try {
-      if (!selectedFile) throw new Error("No file selected");
+      let data;
       
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      formData.append("start_date", startDate);
-      formData.append("end_date", endDate);
-      formData.append("selected_trail_id", selectedTrailId || "");
-      
-      const res = await fetch("/api/plan", { method: "POST", body: formData });
-      const data = await res.json();
+      if (selectedFile) {
+        // GPX upload path
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+        formData.append("start_date", startDate);
+        formData.append("end_date", endDate);
+        formData.append("selected_trail_id", selectedTrailId || "");
+        
+        const res = await fetch("/api/plan", { method: "POST", body: formData });
+        data = await res.json();
+      } else if (selectedTrailId && trailMatch?.auto_selected) {
+        // Name search path - call checks directly for the trail
+        const trail = trailMatch.auto_selected;
+        const weatherRes = await fetch("/api/checks/weather", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat: trail.lat, lng: trail.lng }),
+        });
+        const weather = await weatherRes.json();
+        
+        data = {
+          checks: {
+            weather,
+            aqi: { error: "AQI requires API key" },
+            fire: { error: "Fire check requires GPX route" },
+            snow: { message: "Snow data unavailable" },
+          },
+          risk: { status: "go", reasons: [] },
+        };
+      } else {
+        throw new Error("No trail selected. Please upload a GPX or search for a trail.");
+      }
       
       setPlanResult(data);
       setChecks(data.checks);
       
-      const risk = data.risk?.overall;
-      addMessage("assistant", `Pre-trip checks complete. Overall risk: ${risk || "Unknown"}`);
+      const risk = data.risk?.status || data.risk?.overall;
+      addMessage("assistant", `Pre-trip checks complete. Overall status: ${risk || "Unknown"}`);
     } catch (err) {
       addMessage("assistant", "Error running checks: " + err.message);
     }

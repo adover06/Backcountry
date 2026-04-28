@@ -5,10 +5,14 @@ Planner API endpoints for trip readiness checks.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from planner.route_parser import parse_gpx_bytes
 from planner.trail_matcher import match_trail
@@ -42,6 +46,18 @@ async def trail_match(payload: dict):
     return match
 
 
+@router.post("/api/checks/weather")
+async def check_weather(payload: dict):
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    if not lat or not lng:
+        raise HTTPException(status_code=400, detail="lat and lng required")
+    logger.info(f"Weather check for {lat}, {lng}")
+    weather = get_weather_summary(lat, lng)
+    logger.info(f"Weather result: {weather}")
+    return weather
+
+
 @router.post("/api/plan")
 async def plan_trip(
     file: UploadFile = File(...),
@@ -70,10 +86,23 @@ async def plan_trip(
     if not midpoint:
         raise HTTPException(status_code=400, detail="Could not compute route midpoint.")
 
+    logger.info(f"Running checks for {midpoint}")
+    
+    logger.info("Fetching weather...")
     weather = get_weather_summary(midpoint[0], midpoint[1])
+    logger.info(f"Weather done: {list(weather.keys())}")
+    
+    logger.info("Fetching AQI...")
     aqi = get_aqi_summary(midpoint[0], midpoint[1])
+    logger.info(f"AQI done: {list(aqi.keys())}")
+    
+    logger.info("Fetching fire...")
     fire = get_fire_summary(route)
+    logger.info(f"Fire done: {list(fire.keys())}")
+    
+    logger.info("Fetching snow...")
     snow = get_snow_summary(midpoint[0], midpoint[1], start_date, end_date)
+    logger.info(f"Snow done: {list(snow.keys())}")
 
     checks = {
         "weather": weather,
