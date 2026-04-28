@@ -74,12 +74,12 @@ async def check_aqi(payload: dict):
 async def check_fire(payload: dict):
     lat = payload.get("lat")
     lng = payload.get("lng")
+    radius = payload.get("radius", 50.0)
     if not lat or not lng:
         raise HTTPException(status_code=400, detail="lat and lng required")
-    logger.info(f"Fire check for {lat}, {lng}")
-    # Placeholder route for fire check (no spatial clipping yet)
-    fire = get_fire_summary({"midpoint": [lat, lng]})
-    logger.info(f"Fire result keys: {list(fire.keys())}")
+    logger.info(f"Fire check for {lat}, {lng} (radius: {radius}mi)")
+    fire = get_fire_summary({"midpoint": [lat, lng]}, radius_miles=radius)
+    logger.info(f"Fire result: {fire.get('count', 'N/A')} perimeters within {radius}mi")
     return fire
 
 
@@ -89,11 +89,12 @@ async def check_snow(payload: dict):
     lng = payload.get("lng")
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
+    radius = payload.get("radius", 5.0)
     if not lat or not lng:
         raise HTTPException(status_code=400, detail="lat and lng required")
-    logger.info(f"Snow check for {lat}, {lng}")
-    snow = get_snow_summary(lat, lng, start_date or "", end_date or "")
-    logger.info(f"Snow result: {snow}")
+    logger.info(f"Snow check for {lat}, {lng} (radius: {radius}mi)")
+    snow = get_snow_summary(lat, lng, start_date or "", end_date or "", radius_miles=radius)
+    logger.info(f"Snow result: {snow.get('message')}")
     return snow
 
 
@@ -140,7 +141,7 @@ async def plan_trip(
     logger.info(f"Fire done: {list(fire.keys())}")
     
     logger.info("Fetching snow...")
-    snow = get_snow_summary(midpoint[0], midpoint[1], start_date, end_date)
+    snow = get_snow_summary(midpoint[0], midpoint[1], start_date, end_date, route=route)
     logger.info(f"Snow done: {list(snow.keys())}")
 
     checks = {

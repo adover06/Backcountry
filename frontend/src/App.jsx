@@ -270,6 +270,9 @@ function ChecksStep({ checks, loading, onNext }) {
     if (label === "Snow" && data.image_url) {
       return "Latest NOHRSC snow depth image available.";
     }
+    if (label === "Snow" && data.provider === "Open-Meteo") {
+      return `${data.message} Max depth: ${data.max_depth_in ?? "--"} in · Max snowfall: ${data.max_snowfall_in ?? "--"} in`;
+    }
     if (label === "Snow" && data.message) {
       return data.message;
     }
@@ -300,14 +303,37 @@ function ChecksStep({ checks, loading, onNext }) {
   );
 }
 
+function toLineFeature(layer) {
+  if (!layer) return null;
+  if (layer.type === "Feature" && layer.geometry?.type === "LineString") return layer;
+  if (layer.type === "LineString") {
+    return { type: "Feature", geometry: layer, properties: {} };
+  }
+  return null;
+}
+
+function routeToFeature(routeData) {
+  const coords = routeData?.points?.map((p) => [p.lng, p.lat]).filter((coord) => coord.length === 2) || [];
+  if (coords.length < 2) return null;
+  return { type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: {} };
+}
+
+function getFireCount(firePerimeters) {
+  return firePerimeters?.features?.length || 0;
+}
+
 function ReportStep({ planResult, selectedTrail }) {
   const report = planResult?.report;
   const mapLayers = planResult?.map_layers;
+  const route = planResult?.route;
+  const checks = planResult?.checks;
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const firePerimeters = mapLayers?.fire_perimeters || planResult?.checks?.fire?.perimeters || null;
+  const snowGeojson = checks?.snow?.geojson || null;
+  const routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
   const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const fireCount = getFireCount(firePerimeters);
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
@@ -315,7 +341,7 @@ function ReportStep({ planResult, selectedTrail }) {
     if (!token) return;
     mapboxgl.accessToken = token;
 
-    const routeCoords = mapLayers?.route?.geometry?.coordinates || [];
+    const routeCoords = routeFeature?.geometry?.coordinates || [];
     const center = routeCoords[0] || fallbackCenter || [-120.1287, 38.8649];
 
     const map = new mapboxgl.Map({
@@ -351,14 +377,21 @@ function ReportStep({ planResult, selectedTrail }) {
         map.fitBounds(bounds, { padding: 80, duration: 900 });
         map.addSource("route", {
           type: "geojson",
-          data: mapLayers.route,
+          data: routeFeature,
+        });
+        map.addLayer({
+          id: "route-glow",
+          type: "line",
+          source: "route",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: { "line-color": "#14b8a6", "line-width": 16, "line-opacity": 0.45 },
         });
         map.addLayer({
           id: "route-line",
           type: "line",
           source: "route",
           layout: { "line-join": "round", "line-cap": "round" },
-          paint: { "line-color": "#0f766e", "line-width": 5 },
+          paint: { "line-color": "#042f2e", "line-width": 5 },
         });
       } else if (fallbackCenter) {
         map.addSource("trail-point", {
@@ -386,14 +419,109 @@ function ReportStep({ planResult, selectedTrail }) {
           id: "fire-fill",
           type: "fill",
           source: "fire",
-          paint: { "fill-color": "#f97316", "fill-opacity": 0.2 },
+          paint: { "fill-color": "#f97316", "fill-opacity": 0.28 },
         });
         map.addLayer({
           id: "fire-outline",
           type: "line",
           source: "fire",
-          paint: { "line-color": "#ea580c", "line-width": 1 },
+          paint: { "line-color": "#c2410c", "line-width": 2 },
         });
+        map.addLayer({
+          id: "fire-labels",
+          type: "symbol",
+          source: "fire",
+          layout: {
+            "text-field": [
+              "coalesce",
+              ["get", "IncidentName"],
+              ["get", "poly_IncidentName"],
+              ["get", "IRWINID"],
+              "Fire perimeter",
+            ],
+            "text-size": 12,
+            "text-offset": [0, 0],
+            "text-anchor": "center",
+            "text-allow-overlap": false,
+          },
+          paint: {
+            "text-color": "#7c2d12",
+            "text-halo-color": "#fff7ed",
+            "text-halo-width": 1.5,
+          },
+        });
+
+        if (map.getLayer("route-glow")) map.moveLayer("route-glow", "fire-labels");
+        if (map.getLayer("route-line")) map.moveLayer("route-line", "fire-labels");
+
+        map.on("mouseenter", "fire-fill", () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", "fire-fill", () => {
+          map.getCanvas().style.cursor = "";
+        });
+        map.on("click", "fire-fill", (event) => {
+          const feature = event.features?.[0];
+          if (!feature) return;
+          const props = feature.properties || {};
+          const name = props.IncidentName || props.poly_IncidentName || props.IRWINID || "Fire perimeter";
+          const recency = props.recency_tag ? `<div>Update: ${props.recency_tag}</div>` : "";
+          new mapboxgl.Popup()
+            .setLngLat(event.lngLat)
+            .setHTML(`<strong>${name}</strong>${recency}`)
+            .addTo(map);
+        });
+      }
+
+      if (snowGeojson) {
+        map.addSource("snow", {
+          type: "geojson",
+          data: snowGeojson,
+        });
+        map.addLayer({
+          id: "snow-points",
+          type: "circle",
+          source: "snow",
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["get", "max_depth_in"], 0, 5, 6, 9, 18, 14, 36, 20],
+            "circle-color": [
+              "interpolate",
+              ["linear"],
+              ["get", "max_depth_in"],
+              0,
+              "#dbeafe",
+              6,
+              "#60a5fa",
+              18,
+              "#2563eb",
+              36,
+              "#7c3aed",
+            ],
+            "circle-opacity": ["case", [">", ["get", "max_depth_in"], 0], 0.78, 0.35],
+            "circle-stroke-color": "#ffffff",
+            "circle-stroke-width": 1.5,
+          },
+        });
+        map.addLayer({
+          id: "snow-labels",
+          type: "symbol",
+          source: "snow",
+          layout: {
+            "text-field": ["concat", ["to-string", ["get", "max_depth_in"]], " in"],
+            "text-size": 11,
+            "text-offset": [0, 1.4],
+            "text-anchor": "top",
+            "text-allow-overlap": false,
+          },
+          paint: {
+            "text-color": "#1e3a8a",
+            "text-halo-color": "#eff6ff",
+            "text-halo-width": 1.5,
+          },
+        });
+
+        if (map.getLayer("route-glow")) map.moveLayer("route-glow", "snow-points");
+        if (map.getLayer("route-line")) map.moveLayer("route-line", "snow-points");
       }
     });
 
@@ -401,77 +529,94 @@ function ReportStep({ planResult, selectedTrail }) {
       map.remove();
       mapRef.current = null;
     };
-  }, [mapLayers, selectedTrail, firePerimeters, fallbackCenter]);
-
-  useEffect(() => {
-    if (mapRef.current) {
-      mapRef.current.resize();
-    }
-  }, [isFullscreen]);
+  }, [routeFeature, selectedTrail, firePerimeters, snowGeojson, fallbackCenter]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    const routeCoords = mapLayers?.route?.geometry?.coordinates || [];
+    const routeCoords = routeFeature?.geometry?.coordinates || [];
     if (map.getSource("route") && routeCoords.length) {
-      map.getSource("route").setData(mapLayers.route);
+      map.getSource("route").setData(routeFeature);
     }
     if (map.getSource("fire") && firePerimeters) {
       map.getSource("fire").setData(firePerimeters);
     }
-  }, [mapLayers, firePerimeters]);
+    if (map.getSource("snow") && snowGeojson) {
+      map.getSource("snow").setData(snowGeojson);
+    }
+  }, [routeFeature, firePerimeters, snowGeojson]);
   
   return (
-    <div className="space-y-8">
-      {report && (
-        <div className="rounded-3xl bg-white p-6 shadow-sm">
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">AI Summary</p>
-          <ul className="mt-5 space-y-3 text-sm text-slate-700">
-            {report.bullets?.map((bullet, idx) => (
+    <div className="relative h-[calc(100vh-9.25rem)] min-h-[42rem] overflow-hidden bg-slate-900">
+      {(mapLayers || selectedTrail) && import.meta.env.VITE_MAPBOX_TOKEN ? (
+        <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-100 text-slate-400">
+          {mapLayers || selectedTrail ? "Mapbox token missing" : "Mapbox canvas placeholder"}
+        </div>
+      )}
+
+      <div className="pointer-events-none absolute left-6 top-6 max-w-md rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
+        <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Route Overview</p>
+        <h3 className="mt-2 text-2xl font-semibold text-slate-950">3D trip map</h3>
+        <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+          <div className="rounded-2xl bg-emerald-50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-emerald-700">Route</p>
+            <p className="mt-1 font-semibold text-emerald-950">{routeFeature ? "Loaded" : "Point only"}</p>
+          </div>
+          <div className="rounded-2xl bg-orange-50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-orange-700">Fire</p>
+            <p className="mt-1 font-semibold text-orange-950">{fireCount} areas</p>
+          </div>
+          <div className="rounded-2xl bg-sky-50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-sky-700">Snow</p>
+            <p className="mt-1 font-semibold text-sky-950">{checks?.snow?.max_depth_in ?? "--"} in</p>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-slate-500">Distance: {route?.distance_mi?.toFixed?.(1) || selectedTrail?.length_miles || "--"} mi</p>
+      </div>
+
+      <div className="pointer-events-none absolute bottom-6 left-6 rounded-2xl border border-white/30 bg-white/90 p-4 text-sm shadow-2xl backdrop-blur">
+        <div className="flex items-center gap-3">
+          <span className="h-1.5 w-10 rounded-full bg-teal-900 shadow-[0_0_0_6px_rgba(20,184,166,0.25)]" />
+          <span className="font-medium text-slate-800">GPX/trail route</span>
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <span className="h-4 w-10 rounded bg-orange-500/30 ring-2 ring-orange-700" />
+          <span className="font-medium text-slate-800">Fire perimeter</span>
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <span className="h-4 w-10 rounded-full bg-blue-500/70 ring-2 ring-blue-800" />
+          <span className="font-medium text-slate-800">Snow sample depth</span>
+        </div>
+      </div>
+
+      {report?.bullets?.length ? (
+        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
+          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Briefing</p>
+          <ul className="mt-4 space-y-3 text-sm text-slate-700">
+            {report.bullets.slice(0, 4).map((bullet, idx) => (
               <li key={idx} className="flex gap-3">
-                <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
                 <span>{bullet}</span>
               </li>
             ))}
           </ul>
         </div>
-      )}
-      <div className="rounded-3xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Mapbox Preview</p>
-            <h3 className="mt-2 text-2xl font-semibold text-slate-900">3D route overview</h3>
-            <p className="mt-2 text-sm text-slate-600">Route line, fire perimeters, and terrain visualization will render here.</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setIsFullscreen((prev) => !prev)}
-              className="rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-700 hover:border-emerald-400"
-            >
-              {isFullscreen ? "Exit full screen" : "Full screen"}
-            </button>
-            {mapLayers || selectedTrail ? (
-              <div className="rounded-2xl bg-emerald-600/10 px-4 py-2 text-xs font-semibold text-emerald-700">Data loaded</div>
-            ) : (
-              <div className="rounded-2xl bg-amber-600/10 px-4 py-2 text-xs font-semibold text-amber-700">Demo layer</div>
+      ) : checks ? (
+        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-white/30 bg-white/90 p-5 shadow-2xl backdrop-blur">
+          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Telemetry</p>
+          <div className="mt-4 space-y-2 text-sm text-slate-700">
+            <p>Weather: {checks.weather?.forecast?.[0]?.short || "Loaded"}</p>
+            <p>AQI: {checks.aqi?.observations?.[0]?.aqi || "Loaded"}</p>
+            <p>Snow: {checks.snow?.message || "Loaded"}</p>
+            {checks.snow?.provider === "Open-Meteo" && (
+              <p>Max snow: {checks.snow.max_depth_in} in depth · {checks.snow.max_snowfall_in} in snowfall</p>
             )}
           </div>
         </div>
-        <div className={classNames(
-          "mt-6 rounded-2xl border border-emerald-100 overflow-hidden bg-white/70",
-          isFullscreen ? "fixed inset-8 z-50" : "h-[28rem]"
-        )}>
-          {(mapLayers || selectedTrail) && import.meta.env.VITE_MAPBOX_TOKEN ? (
-            <div ref={mapContainerRef} className="h-full w-full" />
-          ) : (
-            <div className="h-full w-full flex items-center justify-center text-slate-400">
-              {mapLayers || selectedTrail ? "Mapbox token missing" : "Mapbox canvas placeholder"}
-            </div>
-          )}
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -502,6 +647,7 @@ export default function App() {
   
   const stepIndex = steps.findIndex((s) => s.id === activeStep);
   const step = steps[stepIndex];
+  const progress = Math.max(0, ((stepIndex + 1) / steps.length) * 100);
   
   const addMessage = (role, text) => setMessages((prev) => [...prev, { role, text }]);
   
@@ -551,6 +697,7 @@ export default function App() {
       const res = await fetch("/api/route/parse", { method: "POST", body: formData });
       const data = await res.json();
       if (data.route) {
+        setRoute(data.route);
         setGpxRoute(data.route);
         addMessage("assistant", `Route parsed: ${data.route.distance_mi?.toFixed(1) || "?"} miles, ${data.route.elev_gain_ft?.toLocaleString() || "?"} ft elevation gain.`);
         goToStep("dates");
@@ -650,6 +797,11 @@ export default function App() {
     }
     setLoading(false);
   };
+
+  const handleMatchNext = async () => {
+    goToStep("checks");
+    await runPreTripChecks();
+  };
   
   const runPreTripChecks = async () => {
     setLoading(true);
@@ -688,12 +840,12 @@ export default function App() {
           fetch("/api/checks/fire", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ ...payload, radius: 50.0 }),
           }),
           fetch("/api/checks/snow", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ ...payload, radius: 5.0 }),
           }),
         ]);
         const [weather, aqi, fire, snow] = await Promise.all([
@@ -760,7 +912,7 @@ export default function App() {
       case "dates":
         return <DatesStep startDate={startDate} endDate={endDate} onStartDateChange={setStartDate} onEndDateChange={setEndDate} onNext={handleDatesNext} />;
       case "match":
-        return <MatchStep route={route} trailMatch={trailMatch} selectedTrailId={selectedTrailId} onTrailSelect={setSelectedTrailId} onNext={handleMatchNext} loading={loading} />;
+        return <MatchStep route={gpxRoute} trailMatch={trailMatch} selectedTrailId={selectedTrailId} onTrailSelect={setSelectedTrailId} onNext={handleMatchNext} loading={loading} />;
       case "checks":
         return <ChecksStep checks={checks} loading={loading} onNext={handleChecksNext} />;
       case "report":
@@ -776,12 +928,52 @@ export default function App() {
                      step.id === "checks" ? handleChecksNext : null);
   
   return (
-    <div className="grid min-h-screen grid-cols-[3fr_5fr]">
-      <ChatPanel messages={messages} onUserMessage={handleUserMessage} />
-      <main className="h-screen overflow-y-auto bg-[#f6f3ee]">
-        <div className="px-12 py-10 space-y-10">
-          <Stepper activeStep={activeStep} onSelect={goToStep} />
-          <StepHeader step={step} stepIndex={stepIndex} />
+    <div className="min-h-screen bg-[#f6f3ee]">
+      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-[#f6f3ee]/95 backdrop-blur">
+        <div className="mx-auto max-w-7xl px-6 py-4 sm:px-8 lg:px-12">
+          <div className="flex items-center justify-between gap-6">
+            <div>
+              <p className="text-xs uppercase tracking-[0.5em] text-emerald-700">Backcountry Readiness</p>
+              <p className="mt-1 text-sm text-slate-500">Step {stepIndex + 1} of {steps.length}: {step.title}</p>
+            </div>
+            <div className="w-full max-w-xl">
+              <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-full rounded-full bg-emerald-600 transition-all duration-300" style={{ width: `${progress}%` }} />
+              </div>
+              <div className="mt-2 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                <span>Progress</span>
+                <span>{Math.round(progress)}%</span>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {steps.map((item, idx) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => goToStep(item.id)}
+                className={classNames(
+                  "rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] transition",
+                  activeStep === item.id
+                    ? "bg-emerald-600 text-white"
+                    : idx < stepIndex
+                    ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                    : "bg-white text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                {idx + 1}. {item.id}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+      <main>
+        <div className={classNames(
+          activeStep === "report"
+            ? ""
+            : "mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10"
+        )}>
+          {activeStep !== "report" && <StepHeader step={step} stepIndex={stepIndex} />}
           {renderStep()}
         </div>
       </main>

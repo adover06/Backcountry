@@ -103,6 +103,23 @@ def _feature_tags(name: str, area: str, mgmt: str, surface: str) -> list[str]:
     return sorted(set(tags))
 
 
+def _collect_geometry(geometry: dict) -> list[tuple[float, float]]:
+    """Collect all coordinates from a geometry as (lat, lng) pairs."""
+    gtype = geometry.get("type")
+    coords = geometry.get("coordinates")
+    result = []
+    if gtype == "LineString" and isinstance(coords, list):
+        for c in coords:
+            if isinstance(c, list) and len(c) >= 2:
+                result.append((float(c[1]), float(c[0])))
+    elif gtype == "MultiLineString" and isinstance(coords, list):
+        for line in coords:
+            for c in line:
+                if isinstance(c, list) and len(c) >= 2:
+                    result.append((float(c[1]), float(c[0])))
+    return result
+
+
 def _aggregate_group(trail_id: str, segs: list[tuple[dict, dict]]) -> dict:
     names = [str(p.get("TRAIL_NAME", "")).strip() for p, _ in segs if str(p.get("TRAIL_NAME", "")).strip()]
     name = Counter(names).most_common(1)[0][0] if names else f"Unnamed Trail {trail_id}"
@@ -124,6 +141,17 @@ def _aggregate_group(trail_id: str, segs: list[tuple[dict, dict]]) -> dict:
     else:
         lat = 0.0
         lng = 0.0
+
+    all_geom_coords = []
+    for _, g in segs:
+        all_geom_coords.extend(_collect_geometry(g))
+
+    geometry = None
+    if all_geom_coords:
+        geometry = {
+            "type": "LineString",
+            "coordinates": [[c[1], c[0]] for c in all_geom_coords]
+        }
 
     length_miles = round(sum(_safe_float(p.get("SEGMENT_LENGTH", 0.0)) for p, _ in segs), 1)
     route_type = "loop" if any(_is_loop(g) for _, g in segs) else "out-and-back"
@@ -154,6 +182,7 @@ def _aggregate_group(trail_id: str, segs: list[tuple[dict, dict]]) -> dict:
         "activities": ["hiking", "backpacking"],
         "visitor_usage": "",
         "slug": _slugify(name),
+        "geometry": geometry,
     }
 
 
