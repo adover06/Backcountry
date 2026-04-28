@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import math
+import os
 import requests
 from datetime import datetime, timezone
 
+from .cache import TTLCache, env_ttl_seconds
+
 
 NIFC_PERIMETERS = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/ArcGIS/rest/services/WFIGS_Interagency_Perimeters/FeatureServer/0/query"
+FIRE_FEED_CACHE = TTLCache(ttl_seconds=env_ttl_seconds("FIRE_CACHE_TTL_SECONDS", 21600))
 
 
 def _distance_miles(lat1, lng1, lat2, lng2) -> float:
@@ -34,17 +38,20 @@ def get_fire_summary(route: dict, radius_miles: float = 50.0) -> dict:
         lat, lng = route_midpoint[0], route_midpoint[1]
 
     try:
-        params = {
-            "where": "1=1",
-            "outFields": "*",
-            "f": "geojson",
-            "resultRecordCount": 2000,
-            "returnGeometry": "true",
-            "outSR": 4326,
-        }
-        r = requests.get(NIFC_PERIMETERS, params=params, timeout=12)
-        r.raise_for_status()
-        geo = r.json()
+        geo = FIRE_FEED_CACHE.get("wfigs-perimeters")
+        if geo is None:
+            params = {
+                "where": "1=1",
+                "outFields": "*",
+                "f": "geojson",
+                "resultRecordCount": 2000,
+                "returnGeometry": "true",
+                "outSR": 4326,
+            }
+            r = requests.get(NIFC_PERIMETERS, params=params, timeout=12)
+            r.raise_for_status()
+            geo = r.json()
+            FIRE_FEED_CACHE.set("wfigs-perimeters", geo)
 
         filtered_features = []
         for feat in geo.get("features", []):

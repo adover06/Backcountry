@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import math
+import json
+import os
 from statistics import mean
 
 import requests
 
+from .cache import TTLCache, env_ttl_seconds
+
 
 OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
 MILES_PER_LAT_DEGREE = 69.0
+SNOW_CACHE = TTLCache(ttl_seconds=env_ttl_seconds("SNOW_CACHE_TTL_SECONDS", 3600))
 
 
 def _sample_points(lat: float, lng: float, radius_miles: float) -> list[tuple[float, float]]:
@@ -71,6 +76,21 @@ def _representative_point(route: dict | None, lat: float, lng: float) -> tuple[f
 def get_snow_summary(lat: float, lng: float, start_date: str, end_date: str, radius_miles: float = 5.0, route: dict | None = None) -> dict:
     try:
         center_lat, center_lng, elevation_m = _representative_point(route, lat, lng)
+        cache_key = json.dumps(
+            {
+                "lat": round(center_lat, 3),
+                "lng": round(center_lng, 3),
+                "elev": round(elevation_m or 0, 0),
+                "start": start_date or "",
+                "end": end_date or "",
+                "radius": radius_miles,
+            },
+            sort_keys=True,
+        )
+        cached = SNOW_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
         samples = [_fetch_point(p_lat, p_lng, start_date, end_date, elevation_m=elevation_m) for p_lat, p_lng in _sample_points(center_lat, center_lng, radius_miles)]
         max_depth = max((s["max_depth_in"] for s in samples), default=0.0)
         avg_depth = mean([s["max_depth_in"] for s in samples]) if samples else 0.0
@@ -97,7 +117,7 @@ def get_snow_summary(lat: float, lng: float, start_date: str, end_date: str, rad
         else:
             message = f"No meaningful snow detected in the sampled {radius_miles:g}-mile area."
 
-        return {
+        result = {
             "status": "ok",
             "provider": "Open-Meteo",
             "radius_miles": radius_miles,
@@ -110,6 +130,8 @@ def get_snow_summary(lat: float, lng: float, start_date: str, end_date: str, rad
             "samples": samples,
             "geojson": geojson,
         }
+        SNOW_CACHE.set(cache_key, result)
+        return result
     except Exception as e:
         return {
             "status": "unavailable",

@@ -473,63 +473,31 @@ function ReportStep({ planResult, selectedTrail }) {
         });
       }
 
-      if (snowGeojson) {
-        map.addSource("snow", {
-          type: "geojson",
-          data: snowGeojson,
-        });
-        map.addLayer({
-          id: "snow-points",
-          type: "circle",
-          source: "snow",
-          paint: {
-            "circle-radius": ["interpolate", ["linear"], ["get", "max_depth_in"], 0, 5, 6, 9, 18, 14, 36, 20],
-            "circle-color": [
-              "interpolate",
-              ["linear"],
-              ["get", "max_depth_in"],
-              0,
-              "#dbeafe",
-              6,
-              "#60a5fa",
-              18,
-              "#2563eb",
-              36,
-              "#7c3aed",
-            ],
-            "circle-opacity": ["case", [">", ["get", "max_depth_in"], 0], 0.78, 0.35],
-            "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 1.5,
-          },
-        });
-        map.addLayer({
-          id: "snow-labels",
-          type: "symbol",
-          source: "snow",
-          layout: {
-            "text-field": ["concat", ["to-string", ["get", "max_depth_in"]], " in"],
-            "text-size": 11,
-            "text-offset": [0, 1.4],
-            "text-anchor": "top",
-            "text-allow-overlap": false,
-          },
-          paint: {
-            "text-color": "#1e3a8a",
-            "text-halo-color": "#eff6ff",
-            "text-halo-width": 1.5,
-          },
-        });
+      // NOHRSC snow depth raster — free NOAA WMS, no key required, shows current snowpack
+      map.addSource("snow-raster", {
+        type: "raster",
+        tiles: [
+          "https://idpgis.ncep.noaa.gov/arcgis/services/NWS_Observations/NOHRSC_Snow_Analysis/MapServer/WmsServer?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=0&STYLES=&FORMAT=image%2Fpng&TRANSPARENT=TRUE&SRS=EPSG%3A3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256",
+        ],
+        tileSize: 256,
+        attribution: "NOHRSC / NOAA",
+      });
+      map.addLayer({
+        id: "snow-depth",
+        type: "raster",
+        source: "snow-raster",
+        paint: { "raster-opacity": 0.65 },
+      });
 
-        if (map.getLayer("route-glow")) map.moveLayer("route-glow", "snow-points");
-        if (map.getLayer("route-line")) map.moveLayer("route-line", "snow-points");
-      }
+      if (map.getLayer("route-glow")) map.moveLayer("route-glow", "snow-depth");
+      if (map.getLayer("route-line")) map.moveLayer("route-line", "snow-depth");
     });
 
     return () => {
       map.remove();
       mapRef.current = null;
     };
-  }, [routeFeature, selectedTrail, firePerimeters, snowGeojson, fallbackCenter]);
+  }, [routeFeature, selectedTrail, firePerimeters, fallbackCenter]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -542,10 +510,7 @@ function ReportStep({ planResult, selectedTrail }) {
     if (map.getSource("fire") && firePerimeters) {
       map.getSource("fire").setData(firePerimeters);
     }
-    if (map.getSource("snow") && snowGeojson) {
-      map.getSource("snow").setData(snowGeojson);
-    }
-  }, [routeFeature, firePerimeters, snowGeojson]);
+  }, [routeFeature, firePerimeters]);
   
   return (
     <div className="relative h-[calc(100vh-9.25rem)] min-h-[42rem] overflow-hidden bg-slate-900">
@@ -587,8 +552,8 @@ function ReportStep({ planResult, selectedTrail }) {
           <span className="font-medium text-slate-800">Fire perimeter</span>
         </div>
         <div className="mt-3 flex items-center gap-3">
-          <span className="h-4 w-10 rounded-full bg-blue-500/70 ring-2 ring-blue-800" />
-          <span className="font-medium text-slate-800">Snow sample depth</span>
+          <span className="h-4 w-10 rounded" style={{background: "linear-gradient(to right, #c7e9f7, #5bb8e8, #1a6eab)"}} />
+          <span className="font-medium text-slate-800">Snow depth (NOHRSC)</span>
         </div>
       </div>
 
