@@ -25,3 +25,41 @@ button {
 #root {
   min-height: 100vh;
 }
+
+:root[data-theme="dark"] {
+  color: #e2e8f0;
+  background-color: #020617;
+}
+
+:root[data-theme="dark"] body {
+  background-color: #020617;
+  color: #e2e8f0;
+}
+
+:root[data-theme="dark"] [class*="bg-white"] {
+  background-color: #0f172a !important;
+}
+
+:root[data-theme="dark"] [class*="bg-slate-50"] {
+  background-color: #0f172a !important;
+}
+
+:root[data-theme="dark"] [class*="bg-slate-100"] {
+  background-color: #111827 !important;
+}
+
+:root[data-theme="dark"] [class*="bg-[#f6f3ee]"] {
+  background-color: #020617 !important;
+}
+
+:root[data-theme="dark"] [class*="border-slate-200"] {
+  border-color: #1e293b !important;
+}
+
+:root[data-theme="dark"] [class*="text-slate-900"] {
+  color: #f8fafc !important;
+}
+
+:root[data-theme="dark"] [class*="text-slate-500"] {
+  color: #cbd5f5 !important;
+}

@@ -552,17 +552,22 @@ function ChecksStep({ checks, checksLoading, onNext }) {
 
 // ─── Map components ───────────────────────────────────────────────────────────
 
-function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, heightClass }) {
+function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, heightClass, mapStyle, darkMode = false }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const campMarkersRef = useRef([]);
   const userWaterMarkersRef = useRef([]);
   const fireCount = getFireCount(firePerimeters);
+  const styleUrl = mapStyle || (darkMode ? "mapbox://styles/mapbox/dark-v11" : "mapbox://styles/mapbox/outdoors-v12");
 
   useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
+    if (!mapContainerRef.current) return;
     const token = import.meta.env.VITE_MAPBOX_TOKEN;
     if (!token) return;
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
+    }
     mapboxgl.accessToken = token;
 
     const routeCoords = routeFeature?.geometry?.coordinates || [];
@@ -570,7 +575,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
 
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
-      style: "mapbox://styles/mapbox/outdoors-v12",
+      style: styleUrl,
       center, zoom: 9, pitch: 45, bearing: -12,
     });
     mapRef.current = map;
@@ -630,7 +635,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
     });
 
     return () => { map.remove(); mapRef.current = null; };
-  }, []);
+  }, [styleUrl]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -639,7 +644,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
     if (map.getSource("fire") && firePerimeters) map.getSource("fire").setData(firePerimeters);
     if (map.getSource("snow") && snowGeojson) map.getSource("snow").setData(snowGeojson);
     if (map.getSource("water") && waterGeojson) map.getSource("water").setData(waterGeojson);
-  }, [routeFeature, firePerimeters, snowGeojson, waterGeojson]);
+  }, [routeFeature, firePerimeters, snowGeojson, waterGeojson, styleUrl]);
 
   // Draggable camp markers
   useEffect(() => {
@@ -817,7 +822,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   );
 }
 
-function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode }) {
+function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, isDark }) {
   const route = planResult?.route;
   const mapLayers = planResult?.map_layers;
   const checks = planResult?.checks;
@@ -854,6 +859,7 @@ function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, use
         addWaterMode={addWaterMode}
         setAddWaterMode={setAddWaterMode}
         heightClass="h-[58vh]"
+        darkMode={isDark}
       />
 
       <div className="bg-[#f6f3ee] border-t border-slate-200">
@@ -932,16 +938,16 @@ function ReportStep({ planResult, selectedTrail, itineraryDays, routePoints, use
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
-function DashboardView({ onNewPlan, onExplore }) {
+function DashboardView({ onNewPlan, onExplore, isDark }) {
   const sessions = []; // placeholder — will be populated from DB
 
   return (
-    <div className="min-h-screen bg-[#f6f3ee]">
-      <header className="border-b border-slate-200/70 bg-[#f6f3ee]/95 backdrop-blur sticky top-0 z-30">
+    <div className={`min-h-screen ${isDark ? "bg-slate-950 text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
+      <header className={`border-b sticky top-0 z-30 backdrop-blur ${isDark ? "border-slate-900 bg-slate-950/90" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-5 sm:px-8 lg:px-12 flex items-center justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.5em] text-emerald-700">Backcountry</p>
-            <h1 className="text-xl font-semibold text-slate-900 mt-0.5">Trip Planner</h1>
+            <p className={`text-xs uppercase tracking-[0.5em] ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>Backcountry</p>
+            <h1 className={`text-xl font-semibold mt-0.5 ${isDark ? "text-white" : "text-slate-900"}`}>Trip Planner</h1>
           </div>
         </div>
       </header>
@@ -997,7 +1003,7 @@ function DashboardView({ onNewPlan, onExplore }) {
 
 // ─── Explore mode ─────────────────────────────────────────────────────────────
 
-function ExploreView({ onBack }) {
+function ExploreView({ onBack, isDark }) {
   const [step, setStep] = useState("search");
   const [trailName, setTrailName] = useState("");
   const [selectedTrail, setSelectedTrail] = useState(null);
@@ -1058,8 +1064,8 @@ function ExploreView({ onBack }) {
 
   if (step === "map") {
     return (
-      <div className="min-h-screen bg-slate-900">
-        <div className="sticky top-0 z-30 border-b border-white/10 bg-slate-900/95 backdrop-blur px-6 py-3 flex items-center justify-between">
+      <div className={`min-h-screen ${isDark ? "bg-slate-950 text-slate-100" : "bg-slate-900 text-white"}`}>
+        <div className={`sticky top-0 z-30 border-b backdrop-blur px-6 py-3 flex items-center justify-between ${isDark ? "border-slate-800 bg-slate-950/95" : "border-white/10 bg-slate-900/95"}`}>
           <BackBtn label="← Dashboard" onClick={onBack} />
           <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Explore — {selectedTrail?.name || "Custom GPX"}</p>
           <button onClick={() => setStep("search")} className="text-xs uppercase tracking-[0.3em] text-slate-400 hover:text-white transition">← Search</button>
@@ -1072,19 +1078,20 @@ function ExploreView({ onBack }) {
           selectedTrail={selectedTrail}
           route={gpxRoute}
           exploreMode={true}
+          darkMode={isDark}
         />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#f6f3ee]">
-      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-[#f6f3ee]/95 backdrop-blur">
+    <div className={`min-h-screen ${isDark ? "bg-slate-950 text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
+      <header className={`sticky top-0 z-30 border-b backdrop-blur ${isDark ? "border-slate-900 bg-slate-950/95" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-4 sm:px-8 lg:px-12 flex items-center gap-6">
           <BackBtn label="← Dashboard" onClick={onBack} />
           <div>
-            <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">Explore Mode</p>
-            <p className="text-sm text-slate-500 mt-0.5">Find a trail and view it on the map</p>
+            <p className={`text-xs uppercase tracking-[0.4em] ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>Explore Mode</p>
+            <p className={`text-sm mt-0.5 ${isDark ? "text-slate-300" : "text-slate-500"}`}>Find a trail and view it on the map</p>
           </div>
         </div>
       </header>
@@ -1138,7 +1145,7 @@ function ExploreView({ onBack }) {
 
 // ─── Plan mode ────────────────────────────────────────────────────────────────
 
-export function PlanView({ onBack }) {
+export function PlanView({ onBack, isDark }) {
   const [activeStep, setActiveStep] = useState("upload");
   const [route, setRoute] = useState(null);
   const [gpxRoute, setGpxRoute] = useState(null);
@@ -1326,15 +1333,15 @@ export function PlanView({ onBack }) {
   const isReportStep = activeStep === "report";
 
   return (
-    <div className="min-h-screen bg-[#f6f3ee]">
-      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-[#f6f3ee]/95 backdrop-blur">
+    <div className={`min-h-screen ${isDark ? "bg-slate-950 text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
+      <header className={`sticky top-0 z-30 border-b backdrop-blur ${isDark ? "border-slate-900 bg-slate-950/95" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-4 sm:px-8 lg:px-12">
           <div className="flex items-center justify-between gap-6">
             <div className="flex items-center gap-5">
               <BackBtn label="← Home" onClick={onBack} />
               <div>
-                <p className="text-xs uppercase tracking-[0.4em] text-emerald-700">Plan Mode</p>
-                <p className="text-sm text-slate-500 mt-0.5">{PLAN_STEPS[stepIndex]?.label}</p>
+                <p className={`text-xs uppercase tracking-[0.4em] ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>Plan Mode</p>
+                <p className={`text-sm mt-0.5 ${isDark ? "text-slate-300" : "text-slate-500"}`}>{PLAN_STEPS[stepIndex]?.label}</p>
               </div>
             </div>
             <div className="w-full max-w-xs">
@@ -1357,16 +1364,17 @@ export function PlanView({ onBack }) {
 
       <main>
         {isReportStep ? (
-          <ReportStep
-            planResult={planResult}
-            selectedTrail={selectedTrail}
-            itineraryDays={itineraryDays}
-            routePoints={routePoints}
-            userWaterSpots={userWaterSpots}
-            onAddWaterSpot={(spot) => setUserWaterSpots(prev => [...prev, spot])}
-            addWaterMode={addWaterMode}
-            setAddWaterMode={setAddWaterMode}
-          />
+        <ReportStep
+          planResult={planResult}
+          selectedTrail={selectedTrail}
+          itineraryDays={itineraryDays}
+          routePoints={routePoints}
+          userWaterSpots={userWaterSpots}
+          onAddWaterSpot={(spot) => setUserWaterSpots(prev => [...prev, spot])}
+          addWaterMode={addWaterMode}
+          setAddWaterMode={setAddWaterMode}
+          isDark={isDark}
+        />
         ) : (
           <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10">
             {activeStep === "upload" && (
@@ -1420,12 +1428,80 @@ export function PlanView({ onBack }) {
   );
 }
 
+// ─── Theme helpers ─────────────────────────────────────────────────────────────
+
+const THEME_STORAGE_KEY = "backcountry-theme";
+
+const getStoredTheme = () => {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(THEME_STORAGE_KEY);
+};
+
+const getSystemTheme = () => {
+  if (typeof window === "undefined") return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+};
+
+const resolveInitialTheme = () => {
+  const stored = getStoredTheme();
+  if (stored === "dark" || stored === "light") return stored;
+  return getSystemTheme();
+};
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [appMode, setAppMode] = useState("dashboard");
+  const [theme, setTheme] = useState(resolveInitialTheme);
+  const [manualTheme, setManualTheme] = useState(() => {
+    const stored = getStoredTheme();
+    return stored === "dark" || stored === "light";
+  });
 
-  if (appMode === "explore") return <ExploreView onBack={() => setAppMode("dashboard")} />;
-  if (appMode === "plan") return <PlanView onBack={() => setAppMode("dashboard")} />;
-  return <DashboardView onNewPlan={() => setAppMode("plan")} onExplore={() => setAppMode("explore")} />;
+  const isDark = theme === "dark";
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (manualTheme) return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (event) => setTheme(event.matches ? "dark" : "light");
+    if (media.addEventListener) media.addEventListener("change", handler);
+    else media.addListener(handler);
+    return () => {
+      if (media.removeEventListener) media.removeEventListener("change", handler);
+      else media.removeListener(handler);
+    };
+  }, [manualTheme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+    setManualTheme(true);
+  };
+
+  const modeView = appMode === "explore" ? (
+    <ExploreView onBack={() => setAppMode("dashboard")} isDark={isDark} />
+  ) : appMode === "plan" ? (
+    <PlanView onBack={() => setAppMode("dashboard")} isDark={isDark} />
+  ) : (
+    <DashboardView onNewPlan={() => setAppMode("plan")} onExplore={() => setAppMode("explore")} isDark={isDark} />
+  );
+
+  return (
+    <>
+      {modeView}
+      <button
+        onClick={toggleTheme}
+        className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold shadow-2xl transition ${isDark ? "bg-emerald-400 text-slate-900 shadow-emerald-500/40" : "bg-white/90 text-slate-900 shadow-lg"}`}
+        aria-label="Toggle dark mode"
+      >
+        {isDark ? "Light" : "Dark"} mode
+      </button>
+    </>
+  );
 }
