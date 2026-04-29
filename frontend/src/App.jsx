@@ -210,7 +210,9 @@ function BackBtn({ label = "← Dashboard", onClick }) {
 
 // ─── Elevation Profile ────────────────────────────────────────────────────────
 
-function ElevationProfile({ route }) {
+function ElevationProfile({ route, onHoverMile }) {
+  const [hoverInfo, setHoverInfo] = useState(null); // { pct, mile, elev }
+
   if (!route?.points?.length) return null;
   const pts = route.points.filter((p) => p.ele != null);
   if (pts.length < 2) return null;
@@ -228,7 +230,7 @@ function ElevationProfile({ route }) {
   const maxElev = Math.max(...elevs);
   const elevRange = maxElev - minElev || 1;
 
-  const W = 460; const H = 80;
+  const W = 420; const H = 68;
   const padL = 4; const padR = 4; const padT = 6; const padB = 4;
   const chartW = W - padL - padR; const chartH = H - padT - padB;
 
@@ -238,11 +240,44 @@ function ElevationProfile({ route }) {
   const linePoints = data.map((d) => `${xScale(d.dist).toFixed(1)},${yScale(d.elev).toFixed(1)}`).join(" L ");
   const areaPath = `M ${xScale(0)},${(padT + chartH).toFixed(1)} L ${linePoints} L ${xScale(totalMi)},${(padT + chartH).toFixed(1)} Z`;
 
+  const getElevAtDist = (targetDist) => {
+    for (let i = 1; i < data.length; i++) {
+      if (data[i].dist >= targetDist) {
+        const t = (data[i].dist - data[i - 1].dist) > 0
+          ? (targetDist - data[i - 1].dist) / (data[i].dist - data[i - 1].dist)
+          : 0;
+        return data[i - 1].elev + t * (data[i].elev - data[i - 1].elev);
+      }
+    }
+    return data[data.length - 1].elev;
+  };
+
+  const handleMouseMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const mile = pct * totalMi;
+    const elev = getElevAtDist(mile);
+    setHoverInfo({ pct, mile, elev });
+    if (onHoverMile) onHoverMile(mile);
+  };
+
+  const handleMouseLeave = () => {
+    setHoverInfo(null);
+    if (onHoverMile) onHoverMile(null);
+  };
+
+  const hoverSvgX = hoverInfo !== null ? padL + hoverInfo.pct * chartW : null;
+
   return (
-    <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 w-[500px] rounded-3xl border border-white/30 bg-white/90 p-4 shadow-2xl backdrop-blur z-10">
+    <div
+      className="pointer-events-auto absolute bottom-2 left-1/2 -translate-x-1/2 w-[440px] rounded-3xl border border-white/30 bg-white/90 p-4 shadow-2xl backdrop-blur z-10"
+      style={{ cursor: "crosshair" }}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+    >
       <p className="mb-2 text-[10px] uppercase tracking-[0.35em] text-slate-500">Elevation Profile</p>
       <div className="relative">
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 80 }} preserveAspectRatio="none">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }} preserveAspectRatio="none">
           <defs>
             <linearGradient id="elev-grad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
@@ -251,9 +286,29 @@ function ElevationProfile({ route }) {
           </defs>
           <path d={areaPath} fill="url(#elev-grad)" />
           <path d={`M ${linePoints}`} fill="none" stroke="#059669" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+          {hoverSvgX !== null && (
+            <>
+              <line x1={hoverSvgX} y1={padT} x2={hoverSvgX} y2={padT + chartH} stroke="#10b981" strokeWidth="1" strokeDasharray="3,2" opacity="0.75" />
+              <circle cx={hoverSvgX} cy={yScale(hoverInfo.elev)} r="3.5" fill="#10b981" stroke="white" strokeWidth="1.5" />
+            </>
+          )}
         </svg>
         <span className="absolute left-1 top-0 text-[9px] font-medium leading-none text-slate-500">{Math.round(maxElev).toLocaleString()} ft</span>
         <span className="absolute bottom-0 left-1 text-[9px] font-medium leading-none text-slate-500">{Math.round(minElev).toLocaleString()} ft</span>
+        {hoverInfo && (
+          <div
+            className="absolute pointer-events-none rounded px-1.5 py-0.5 text-[9px] font-semibold text-white"
+            style={{
+              top: 0,
+              left: `${Math.max(2, Math.min(78, hoverInfo.pct * 100 - 8))}%`,
+              background: "rgba(15,23,42,0.88)",
+              transform: "translateY(-120%)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {Math.round(hoverInfo.elev).toLocaleString()} ft · {hoverInfo.mile.toFixed(1)} mi
+          </div>
+        )}
       </div>
       <div className="mt-0.5 flex justify-between text-[9px] uppercase tracking-[0.2em] text-slate-400">
         <span>0 mi</span>
@@ -605,6 +660,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   const mapRef = useRef(null);
   const campMarkersRef = useRef([]);
   const userWaterMarkersRef = useRef([]);
+  const hoverMarkerRef = useRef(null);
   const fireCount = getFireCount(firePerimeters);
   const styleUrl = "mapbox://styles/mapbox/outdoors-v12";
 
@@ -612,6 +668,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   const [is3D, setIs3D] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [scaleInfo, setScaleInfo] = useState(null);
+  const [hoveredMile, setHoveredMile] = useState(null);
 
   // Ref so remove-button closures inside marker DOM don't go stale
   const onRemoveWaterSpotRef = useRef(onRemoveWaterSpot);
@@ -663,7 +720,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         map.on("click", "fire-fill", (e) => {
           const p = e.features[0].properties;
           const name = p.IncidentName || p.poly_IncidentName || "Fire perimeter";
-          new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(`<strong>${name}</strong><br/>${p.recency_tag || ""} · ${p.days_since_update != null ? p.days_since_update + " days ago" : ""}`).addTo(map);
+          new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(`<div style="color:#1e293b;font-size:12px;"><strong>${name}</strong><br/><span style="color:#92400e;">${p.recency_tag || ""}</span>${p.days_since_update != null ? " · " + p.days_since_update + " days ago" : ""}</div>`).addTo(map);
         });
         if (routeCoords.length) { map.moveLayer("route-glow"); map.moveLayer("route-line"); }
       }
@@ -686,7 +743,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         map.addLayer({ id: "water-label", type: "symbol", source: "water", layout: { "text-field": ["get", "name"], "text-size": 11, "text-offset": [0, 1.6], "text-anchor": "top" }, paint: { "text-color": "#0c4a6e", "text-halo-color": "#f0f9ff", "text-halo-width": 2 } });
         map.on("click", "water-point", (e) => {
           const p = e.features[0].properties;
-          new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(`<strong>${p.name}</strong><br/>${p.water_type} · ${p.distance_mi} mi from trail`).addTo(map);
+          new mapboxgl.Popup().setLngLat(e.lngLat).setHTML(`<div style="color:#1e293b;font-size:12px;"><strong>${p.name}</strong><br/><span style="color:#0369a1;">${p.water_type}</span> · ${p.distance_mi} mi from trail</div>`).addTo(map);
         });
       }
 
@@ -713,7 +770,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
       if (mi >= 0.2)      label = `${mi % 1 === 0 ? mi : mi.toFixed(mi < 2 ? 1 : 0)} mi`;
       else if (ft < 1000) label = `${Math.round(ft)} ft`;
       else                label = `${nice >= 1000 ? (nice/1000).toFixed(nice % 1000 === 0 ? 0 : 1) + " km" : nice + " m"}`;
-      setScaleInfo({ barPx: Math.min(barPx, 160), label });
+      setScaleInfo({ barPx: Math.min(barPx, 220), label });
     };
     map.on("load", update);
     map.on("move", update);
@@ -809,7 +866,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         el.style.cssText = "width:26px;height:26px;background:#10b981;border:2.5px solid #065f46;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:white;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.3);user-select:none;";
         el.textContent = day.day;
         const popup = new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
-          `<div style="font-size:12px"><strong>Camp — Day ${day.day}</strong><br/>Mile ${day.endMile} · ${day.miles} mi today<br/><em>Drag to reposition along trail</em></div>`
+          `<div style="font-size:12px;color:#1e293b;"><strong>Camp — Day ${day.day}</strong><br/>Mile ${day.endMile} · ${day.miles} mi today<br/><em style="color:#64748b;">Drag to reposition along trail</em></div>`
         );
         const marker = new mapboxgl.Marker({ element: el, draggable: true }).setLngLat([initPt.lng, initPt.lat]).setPopup(popup).addTo(map);
         el.addEventListener("mouseenter", () => marker.togglePopup());
@@ -863,7 +920,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
       wrapper.addEventListener("mouseleave", () => { removeBtn.style.display = "none"; });
 
       const popup = new mapboxgl.Popup({ offset: 22, closeButton: false }).setHTML(
-        `<div style="font-size:12px"><strong>${spot.name || "Water source"}</strong><br/><em>User-added · click × to remove</em></div>`
+        `<div style="font-size:12px;color:#1e293b;"><strong>${spot.name || "Water source"}</strong><br/><em style="color:#64748b;">User-added · click × to remove</em></div>`
       );
       const marker = new mapboxgl.Marker({ element: wrapper }).setLngLat([spot.lng, spot.lat]).setPopup(popup).addTo(map);
       el.addEventListener("mouseenter", () => marker.togglePopup());
@@ -880,6 +937,26 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
     map.getCanvas().style.cursor = addWaterMode ? "crosshair" : "";
   }, [addWaterMode]);
 
+  // Elevation profile hover dot — moves a green circle along the route
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const pts = route?.points;
+    if (hoveredMile === null || !pts?.length) {
+      if (hoverMarkerRef.current) { hoverMarkerRef.current.remove(); hoverMarkerRef.current = null; }
+      return;
+    }
+    const pt = getPointAtMile(pts, hoveredMile);
+    if (!pt) return;
+    if (!hoverMarkerRef.current) {
+      const el = document.createElement("div");
+      el.style.cssText = "width:14px;height:14px;background:#10b981;border:2.5px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.45);pointer-events:none;";
+      hoverMarkerRef.current = new mapboxgl.Marker({ element: el }).setLngLat([pt.lng, pt.lat]).addTo(map);
+    } else {
+      hoverMarkerRef.current.setLngLat([pt.lng, pt.lat]);
+    }
+  }, [hoveredMile, route]);
+
   return (
     <div className={`relative ${heightClass || "h-[calc(100vh-9.25rem)]"} min-h-[36rem] overflow-hidden bg-slate-900`}>
       {import.meta.env.VITE_MAPBOX_TOKEN ? (
@@ -888,81 +965,94 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         <div className="absolute inset-0 flex items-center justify-center bg-slate-100 text-slate-400">Mapbox token missing</div>
       )}
 
-      {/* Route overview card — always light (map is always outdoors style) */}
-      <div className="pointer-events-none absolute left-6 top-6 max-w-xs rounded-3xl border border-slate-200/60 p-5 shadow-2xl backdrop-blur" style={{ backgroundColor: "rgba(255,255,255,0.93)", color: "#0f172a" }}>
-        <p className="text-xs uppercase tracking-[0.3em] text-slate-500">{exploreMode ? "Explore" : "Route Overview"}</p>
-        <h3 className="mt-2 text-xl font-semibold text-slate-950">{selectedTrail?.name || "3D trip map"}</h3>
-        <p className="mt-1 text-xs text-slate-500">{selectedTrail?.area || ""}</p>
-        <div className={`mt-4 grid gap-3 text-sm ${exploreMode ? "grid-cols-2" : "grid-cols-2"}`}>
-          <div className="rounded-2xl p-3" style={{ backgroundColor: "#ecfdf5" }}>
-            <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#065f46" }}>Route</p>
-            <p className="mt-1 font-semibold" style={{ color: "#022c22" }}>{routeFeature ? "Loaded" : "Point only"}</p>
+      {/* ── Route overview card (top-left) ── */}
+      <div className="pointer-events-none absolute left-5 top-5 w-52 rounded-2xl border border-slate-200/80 p-4 shadow-xl backdrop-blur-sm" style={{ backgroundColor: "rgba(255,255,255,0.96)", color: "#0f172a" }}>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.3em]" style={{ color: "#94a3b8" }}>{exploreMode ? "Explore" : "Route Overview"}</p>
+        <h3 className="mt-1.5 text-base font-bold leading-snug" style={{ color: "#0f172a" }}>{selectedTrail?.name || "3D trip map"}</h3>
+        {selectedTrail?.area && <p className="mt-0.5 text-xs truncate" style={{ color: "#64748b" }}>{selectedTrail.area}</p>}
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="rounded-xl px-2.5 py-2" style={{ backgroundColor: "#ecfdf5" }}>
+            <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#047857" }}>Route</p>
+            <p className="mt-0.5 text-xs font-bold" style={{ color: "#064e3b" }}>{routeFeature ? "Loaded" : "Point"}</p>
           </div>
           {!exploreMode && (
-            <div className="rounded-2xl p-3" style={{ backgroundColor: "#fff7ed" }}>
-              <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#c2410c" }}>Fire</p>
-              <p className="mt-1 font-semibold" style={{ color: "#431407" }}>{fireCount} areas</p>
+            <div className="rounded-xl px-2.5 py-2" style={{ backgroundColor: "#fff7ed" }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#c2410c" }}>Fire</p>
+              <p className="mt-0.5 text-xs font-bold" style={{ color: "#7c2d12" }}>{fireCount} areas</p>
             </div>
           )}
           {!exploreMode && (
-            <div className="rounded-2xl p-3" style={{ backgroundColor: "#f0f9ff" }}>
-              <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#0369a1" }}>Snow</p>
-              <p className="mt-1 font-semibold" style={{ color: "#0c4a6e" }}>{checks?.snow?.max_depth_in ?? "--"} in</p>
+            <div className="rounded-xl px-2.5 py-2" style={{ backgroundColor: "#f0f9ff" }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#0369a1" }}>Snow</p>
+              <p className="mt-0.5 text-xs font-bold" style={{ color: "#0c4a6e" }}>{checks?.snow?.max_depth_in ?? "--"} in</p>
             </div>
           )}
           {!exploreMode && (
-            <div className="rounded-2xl p-3" style={{ backgroundColor: "#ecfeff" }}>
-              <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#0e7490" }}>Water</p>
-              <p className="mt-1 font-semibold" style={{ color: "#083344" }}>{checks?.water?.count ?? "--"} sources</p>
+            <div className="rounded-xl px-2.5 py-2" style={{ backgroundColor: "#ecfeff" }}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#0e7490" }}>Water</p>
+              <p className="mt-0.5 text-xs font-bold" style={{ color: "#164e63" }}>{checks?.water?.count ?? "--"} src</p>
             </div>
           )}
-          <div className="rounded-2xl p-3" style={{ backgroundColor: "#f8fafc" }}>
-            <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: "#64748b" }}>Distance</p>
-            <p className="mt-1 font-semibold" style={{ color: "#0f172a" }}>{route?.length_miles?.toFixed?.(1) || selectedTrail?.length_miles || "--"} mi</p>
+          <div className="rounded-xl px-2.5 py-2" style={{ backgroundColor: "#f8fafc" }}>
+            <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#64748b" }}>Distance</p>
+            <p className="mt-0.5 text-xs font-bold" style={{ color: "#1e293b" }}>{route?.length_miles?.toFixed?.(1) || selectedTrail?.length_miles || "--"} mi</p>
           </div>
         </div>
       </div>
 
-      {/* Legend — always light */}
-      <div className="pointer-events-none absolute bottom-6 left-6 rounded-2xl border border-slate-200/60 p-4 text-sm shadow-2xl backdrop-blur" style={{ backgroundColor: "rgba(255,255,255,0.93)", color: "#0f172a" }}>
-        <div className="flex items-center gap-3">
-          <span className="h-1.5 w-10 rounded-full bg-teal-900 shadow-[0_0_0_6px_rgba(20,184,166,0.25)]" />
-          <span className="font-medium text-slate-800">GPX/trail route</span>
+      {/* ── Legend (bottom-left) ── */}
+      <div className="pointer-events-none absolute bottom-5 left-5 rounded-xl border border-slate-200/80 px-3 py-2.5 shadow-lg backdrop-blur-sm" style={{ backgroundColor: "rgba(255,255,255,0.96)" }}>
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.3em]" style={{ color: "#94a3b8" }}>Legend</p>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2.5">
+            <span className="h-1.5 w-8 shrink-0 rounded-full bg-teal-800 shadow-[0_0_0_4px_rgba(20,184,166,0.2)]" />
+            <span className="text-xs font-medium" style={{ color: "#334155" }}>GPX / trail route</span>
+          </div>
+          {!exploreMode && (
+            <>
+              <div className="flex items-center gap-2.5">
+                <span className="h-3.5 w-8 shrink-0 rounded bg-orange-400/30 ring-1 ring-orange-600" />
+                <span className="text-xs font-medium" style={{ color: "#334155" }}>Fire perimeter</span>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <span className="h-3.5 w-3.5 shrink-0 rounded-full border-2 border-blue-400 bg-blue-100" />
+                <span className="text-xs font-medium" style={{ color: "#334155" }}>Snow depth</span>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <span className="h-3.5 w-3.5 shrink-0 rounded-full border-2 border-cyan-500 bg-cyan-100" />
+                <span className="text-xs font-medium" style={{ color: "#334155" }}>Water source</span>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-emerald-500 ring-2 ring-emerald-800 flex items-center justify-center text-[8px] font-bold text-white leading-none">1</span>
+                <span className="text-xs font-medium" style={{ color: "#334155" }}>Camp marker</span>
+              </div>
+            </>
+          )}
         </div>
-        {!exploreMode && (
-          <>
-            <div className="mt-3 flex items-center gap-3">
-              <span className="h-4 w-10 rounded bg-orange-500/30 ring-2 ring-orange-700" />
-              <span className="font-medium text-slate-800">Fire perimeter</span>
-            </div>
-            <div className="mt-3 flex items-center gap-3">
-              <span className="h-4 w-4 rounded-full border-2 border-blue-500 bg-blue-200" />
-              <span className="font-medium text-slate-800">Snow depth</span>
-            </div>
-            <div className="mt-3 flex items-center gap-3">
-              <span className="h-4 w-4 rounded-full border-2 border-cyan-600 bg-cyan-200" />
-              <span className="font-medium text-slate-800">Water source</span>
-            </div>
-          </>
-        )}
       </div>
 
-      {/* Briefing card — always light */}
-      {!exploreMode && checks ? (
-        <div className="pointer-events-none absolute right-6 top-6 max-w-sm rounded-3xl border border-slate-200/60 p-5 shadow-2xl backdrop-blur" style={{ backgroundColor: "rgba(255,255,255,0.93)", color: "#0f172a" }}>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Briefing</p>
-          <div className="mt-4 space-y-2 text-sm text-slate-700">
-            <p><span className="font-semibold">Weather:</span> {checks.weather?.forecast?.[0]?.short || "—"}</p>
-            <p><span className="font-semibold">AQI:</span> {checks.aqi?.observations?.[0]?.aqi ?? "—"}</p>
-            <p><span className="font-semibold">Snow:</span> {checks.snow?.max_depth_in != null ? `${checks.snow.max_depth_in} in` : "None"}</p>
-            <p><span className="font-semibold">Water:</span> {checks.water?.count ?? "—"} sources</p>
+      {/* ── Briefing card (top-right, nudged left of controls) ── */}
+      {!exploreMode && checks && (
+        <div className="pointer-events-none absolute right-14 top-5 w-48 rounded-2xl border border-slate-200/80 p-4 shadow-xl backdrop-blur-sm" style={{ backgroundColor: "rgba(255,255,255,0.96)" }}>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.3em]" style={{ color: "#94a3b8" }}>Briefing</p>
+          <div className="mt-2.5 space-y-1.5">
+            {[
+              { label: "Weather", value: checks.weather?.forecast?.[0]?.short || "—", extra: true },
+              { label: "AQI",     value: checks.aqi?.observations?.[0]?.aqi ?? "—" },
+              { label: "Snow",    value: checks.snow?.max_depth_in != null ? `${checks.snow.max_depth_in} in` : "None" },
+              { label: "Water",   value: `${checks.water?.count ?? "—"} sources` },
+            ].map(({ label, value, extra }) => (
+              <div key={label} className="flex justify-between text-xs">
+                <span className="font-semibold" style={{ color: "#475569" }}>{label}</span>
+                <span className="font-medium text-right ml-2 leading-tight" style={{ color: "#1e293b" }}>{value}</span>
+              </div>
+            ))}
           </div>
         </div>
-      ) : null}
+      )}
 
       {/* ── Right-side control strip ── */}
-      <div className="pointer-events-auto absolute right-3 top-1/2 -translate-y-1/2 flex flex-col gap-1.5 z-10">
-        {/* 2D / 3D toggle */}
+      <div className="pointer-events-auto absolute right-3 top-1/2 -translate-y-1/2 flex flex-col gap-1 z-10">
         <button
           title={is3D ? "Switch to flat 2D view" : "Switch to 3D terrain view"}
           onClick={() => {
@@ -972,33 +1062,28 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
             setIs3D(next);
             map.easeTo({ pitch: next ? 45 : 0, bearing: next ? -12 : 0, duration: 600 });
           }}
-          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-[11px] font-bold text-slate-700 hover:bg-white transition flex items-center justify-center">
+          className="w-9 h-9 rounded-xl bg-white/95 shadow border border-slate-200 text-[11px] font-bold text-slate-700 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 transition-colors flex items-center justify-center">
           {is3D ? "2D" : "3D"}
         </button>
 
-        <div className="h-px bg-slate-300/60 mx-1" />
+        <div className="h-px bg-slate-200 mx-1.5 my-0.5" />
 
-        {/* Zoom in */}
         <button title="Zoom in" onClick={() => mapRef.current?.zoomIn({ duration: 250 })}
-          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-lg font-light text-slate-700 hover:bg-white transition flex items-center justify-center leading-none">
+          className="w-9 h-9 rounded-xl bg-white/95 shadow border border-slate-200 text-xl font-light text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors flex items-center justify-center leading-none">
           +
         </button>
-        {/* Zoom out */}
         <button title="Zoom out" onClick={() => mapRef.current?.zoomOut({ duration: 250 })}
-          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-lg font-light text-slate-700 hover:bg-white transition flex items-center justify-center leading-none">
+          className="w-9 h-9 rounded-xl bg-white/95 shadow border border-slate-200 text-xl font-light text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors flex items-center justify-center leading-none">
           −
         </button>
 
-        <div className="h-px bg-slate-300/60 mx-1" />
+        <div className="h-px bg-slate-200 mx-1.5 my-0.5" />
 
-        {/* Reset north */}
         <button title="Reset to north" onClick={() => mapRef.current?.resetNorth({ duration: 500 })}
-          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-slate-700 hover:bg-white transition flex items-center justify-center"
-          style={{ fontSize: 15 }}>
-          ↑
+          className="w-9 h-9 rounded-xl bg-white/95 shadow border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors flex items-center justify-center font-semibold">
+          N↑
         </button>
 
-        {/* Fit route */}
         {routeFeature?.geometry?.coordinates?.length > 0 && (
           <button title="Fit route to view" onClick={() => {
             const map = mapRef.current;
@@ -1007,53 +1092,66 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
             const bounds = coords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
             map.fitBounds(bounds, { padding: 80, duration: 700 });
           }}
-          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-slate-700 hover:bg-white transition flex items-center justify-center"
-          style={{ fontSize: 13 }}>
-          ⊡
+          className="w-9 h-9 rounded-xl bg-white/95 shadow border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors flex items-center justify-center text-sm font-semibold">
+          ⊙
         </button>
         )}
 
-        <div className="h-px bg-slate-300/60 mx-1" />
+        <div className="h-px bg-slate-200 mx-1.5 my-0.5" />
 
-        {/* Help toggle */}
-        <button title="Map controls" onClick={() => setShowHelp(h => !h)}
-          className={`w-9 h-9 rounded-xl shadow-md border text-xs font-bold transition flex items-center justify-center ${showHelp ? "bg-slate-700 text-white border-slate-600" : "bg-white/90 border-slate-200/60 text-slate-500 hover:bg-white"}`}>
+        <button title="Map controls help" onClick={() => setShowHelp(h => !h)}
+          className={`w-9 h-9 rounded-xl shadow border text-xs font-bold transition-colors flex items-center justify-center ${showHelp ? "bg-slate-800 text-white border-slate-700" : "bg-white/95 border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700"}`}>
           ?
         </button>
       </div>
 
-      {/* ── Keyboard / interaction help panel ── */}
+      {/* ── Help panel ── */}
       {showHelp && (
-        <div className="pointer-events-auto absolute right-14 top-1/2 -translate-y-1/2 w-52 rounded-2xl border border-slate-200/70 bg-white/95 p-4 shadow-2xl backdrop-blur z-10 text-xs text-slate-700">
-          <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400 mb-3">Map Controls</p>
-          <ul className="space-y-2">
-            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Drag</span><span className="text-slate-500">Pan the map</span></li>
-            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Scroll</span><span className="text-slate-500">Zoom in/out</span></li>
-            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Ctrl + drag</span><span className="text-slate-500">Rotate &amp; tilt</span></li>
-            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Shift + drag</span><span className="text-slate-500">Box zoom</span></li>
-            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Double-click</span><span className="text-slate-500">Zoom in</span></li>
-            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Right-drag</span><span className="text-slate-500">Rotate bearing</span></li>
-            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Two-finger drag</span><span className="text-slate-500">Tilt &amp; rotate</span></li>
-          </ul>
-          <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
-            <li className="flex gap-2 list-none"><span className="font-semibold w-28 shrink-0">⊡ button</span><span className="text-slate-500">Re-fit route</span></li>
-            <li className="flex gap-2 list-none"><span className="font-semibold w-28 shrink-0">↑ button</span><span className="text-slate-500">Point north</span></li>
-            <li className="flex gap-2 list-none"><span className="font-semibold w-28 shrink-0">2D/3D button</span><span className="text-slate-500">Toggle terrain pitch</span></li>
-            <li className="flex gap-2 list-none"><span className="font-semibold w-28 shrink-0">💧 + ×</span><span className="text-slate-500">Hover to remove water source</span></li>
+        <div className="pointer-events-auto absolute right-14 top-1/2 -translate-y-1/2 w-56 rounded-2xl border border-slate-200 bg-white/98 p-4 shadow-2xl backdrop-blur-sm z-10">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-slate-400 mb-3">Map Controls</p>
+          <div className="space-y-1.5 text-xs">
+            {[
+              ["Drag", "Pan the map"],
+              ["Scroll / pinch", "Zoom in & out"],
+              ["Ctrl + drag", "Rotate & tilt"],
+              ["Shift + drag", "Box zoom"],
+              ["Double-click", "Zoom in"],
+              ["Right-drag", "Rotate bearing"],
+            ].map(([k, v]) => (
+              <div key={k} className="flex gap-2">
+                <span className="w-28 shrink-0 font-semibold text-slate-700">{k}</span>
+                <span className="text-slate-500">{v}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 pt-3 border-t border-slate-100 space-y-1.5 text-xs">
+            {[
+              ["2D / 3D", "Toggle terrain tilt"],
+              ["N↑", "Reset to north"],
+              ["⊙", "Re-fit route"],
+              ["💧 hover ×", "Remove water source"],
+              ["Camp marker", "Drag to reposition"],
+            ].map(([k, v]) => (
+              <div key={k} className="flex gap-2">
+                <span className="w-28 shrink-0 font-semibold text-slate-700">{k}</span>
+                <span className="text-slate-500">{v}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
 
-      {/* ── Scale bar ── */}
+      {/* ── Scale bar (bottom-right, above water button) ── */}
       {scaleInfo && (
-        <div className="pointer-events-none absolute bottom-14 left-6 flex flex-col items-start gap-0.5 z-10">
-          <div className="flex items-end gap-1">
-            <div style={{ width: scaleInfo.barPx }} className="h-1 bg-slate-800 rounded-sm relative">
-              <div className="absolute left-0 top-0 h-2.5 w-0.5 bg-slate-800 -translate-y-1" />
-              <div className="absolute right-0 top-0 h-2.5 w-0.5 bg-slate-800 -translate-y-1" />
-            </div>
+        <div className="pointer-events-none absolute bottom-16 right-14 flex flex-col items-end gap-1 z-10">
+          <div className="relative" style={{ width: scaleInfo.barPx }}>
+            <div className="absolute left-0 bottom-0 h-2.5 w-0.5 bg-slate-700" />
+            <div className="absolute right-0 bottom-0 h-2.5 w-0.5 bg-slate-700" />
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-slate-700" />
           </div>
-          <span className="text-[10px] font-semibold text-slate-800 bg-white/80 rounded px-1 leading-tight">{scaleInfo.label}</span>
+          <span className="text-[11px] font-semibold text-slate-800 bg-white/90 border border-slate-200/80 rounded-md px-1.5 py-0.5 leading-tight shadow-sm" style={{ marginTop: scaleInfo.barPx > 0 ? 2 : 0 }}>
+            {scaleInfo.label}
+          </span>
         </div>
       )}
 
@@ -1061,16 +1159,18 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
       {!exploreMode && onAddWaterSpot && (
         <div className="pointer-events-auto absolute bottom-5 right-3 flex flex-col items-end gap-1.5">
           <button onClick={() => setAddWaterMode?.(m => !m)}
-            className={`rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition backdrop-blur ${addWaterMode ? "bg-cyan-600 text-white ring-2 ring-cyan-400" : "bg-white/90 text-cyan-700 border border-cyan-200 hover:bg-cyan-50"}`}>
-            {addWaterMode ? "Click map to place · click again to stop" : "+ Add water source"}
+            className={`rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition-colors ${addWaterMode ? "bg-cyan-600 text-white ring-2 ring-cyan-300" : "bg-white/95 text-cyan-700 border border-cyan-300 hover:bg-cyan-50"}`}>
+            {addWaterMode ? "Click map to place · click to stop" : "+ Add water source"}
           </button>
           {(userWaterSpots?.length || 0) > 0 && !addWaterMode && (
-            <span className="text-[10px] text-white/70 bg-black/30 rounded-full px-2 py-0.5 backdrop-blur">{userWaterSpots.length} added · hover to remove</span>
+            <span className="text-[11px] font-medium text-slate-700 bg-white/90 border border-slate-200 rounded-full px-2.5 py-0.5 shadow-sm">
+              {userWaterSpots.length} added · hover to remove
+            </span>
           )}
         </div>
       )}
 
-      <ElevationProfile route={route} />
+      <ElevationProfile route={route} onHoverMile={setHoveredMile} />
     </div>
   );
 }
@@ -1826,7 +1926,12 @@ export function PlanView({ onBack, isDark }) {
             {PLAN_STEPS.map((s, idx) => (
               <button key={s.id} onClick={() => goTo(s.id)}
                 className={classNames("rounded-full px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] transition",
-                  activeStep === s.id ? "bg-emerald-600 text-white" : idx < stepIndex ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "bg-white text-slate-500 hover:bg-slate-50")}>
+                  activeStep === s.id
+                    ? "bg-emerald-600 text-white"
+                    : idx < stepIndex
+                    ? isDark ? "bg-emerald-900/60 text-emerald-300 hover:bg-emerald-900" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                    : isDark ? "bg-white/10 text-slate-300 hover:bg-white/20" : "bg-white text-slate-500 hover:bg-slate-50"
+                )}>
                 {idx + 1}. {s.label}
               </button>
             ))}
