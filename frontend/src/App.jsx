@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import mapboxgl from "mapbox-gl";
 import "./index.css";
 
@@ -123,6 +123,27 @@ function interpolateRoutePoints(pts, n = 10) {
     result.push({ lat: pts[seg].lat + t * (next.lat - pts[seg].lat), lng: pts[seg].lng + t * (next.lng - pts[seg].lng) });
   }
   return result;
+}
+
+// Project a dragged lat/lng onto the nearest point on the route polyline.
+// Only snaps if within maxRadiusMi miles to avoid hard-locking far drags.
+function snapToTrail(pts, lat, lng, maxRadiusMi = 0.4) {
+  if (!pts?.length) return { lat, lng };
+  let bestDist = Infinity;
+  let bestLat = lat, bestLng = lng;
+  for (let i = 1; i < pts.length; i++) {
+    const ax = pts[i-1].lng, ay = pts[i-1].lat;
+    const bx = pts[i].lng,   by = pts[i].lat;
+    const dx = bx - ax,      dy = by - ay;
+    const lenSq = dx*dx + dy*dy;
+    let t = lenSq > 0 ? ((lng - ax)*dx + (lat - ay)*dy) / lenSq : 0;
+    t = Math.max(0, Math.min(1, t));
+    const projLng = ax + t*dx;
+    const projLat = ay + t*dy;
+    const d = haversineMiles(lat, lng, projLat, projLng);
+    if (d < bestDist) { bestDist = d; bestLat = projLat; bestLng = projLng; }
+  }
+  return bestDist <= maxRadiusMi ? { lat: bestLat, lng: bestLng } : { lat, lng };
 }
 
 function getDaytimePeriods(forecast) {
@@ -629,18 +650,13 @@ function ChecksStep({ checks, checksLoading, onNext }) {
 
 // ─── Map components ───────────────────────────────────────────────────────────
 
-function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, heightClass, onCampPositionsChange }) {
+function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, heightClass, onCampPositionsChange, campPositions }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const campMarkersRef = useRef([]);
   const userWaterMarkersRef = useRef([]);
   const fireCount = getFireCount(firePerimeters);
   const styleUrl = "mapbox://styles/mapbox/outdoors-v12";
-  // Keep mutable values in refs so map callbacks don't go stale
-  const addWaterModeRef = useRef(addWaterMode);
-  const onAddWaterSpotRef = useRef(onAddWaterSpot);
-  useEffect(() => { addWaterModeRef.current = addWaterMode; }, [addWaterMode]);
-  useEffect(() => { onAddWaterSpotRef.current = onAddWaterSpot; }, [onAddWaterSpot]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -717,21 +733,23 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
 
     });
 
-    // Register click handler directly on the map object (not inside load callback)
-    // so it fires reliably regardless of terrain/layer event ordering
-    if (!exploreMode) {
-      const waterClickHandler = (e) => {
-        if (addWaterModeRef.current && onAddWaterSpotRef.current) {
-          // Don't fire if user clicked a popup or UI control
-          if (e.originalEvent?.target?.closest?.(".mapboxgl-popup, .mapboxgl-ctrl")) return;
-          onAddWaterSpotRef.current({ lat: e.lngLat.lat, lng: e.lngLat.lng, name: "Water source" });
-        }
-      };
-      map.on("click", waterClickHandler);
-    }
-
     return () => { map.remove(); mapRef.current = null; };
   }, [styleUrl]);
+
+  // Water source click handler — re-registered whenever addWaterMode changes so it
+  // always closes over the current values. Cleanup removes the old listener each time.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || exploreMode) return;
+    const handleClick = (e) => {
+      if (!addWaterMode || !onAddWaterSpot) return;
+      if (e.originalEvent?.target?.closest?.(".mapboxgl-popup")) return;
+      onAddWaterSpot({ lat: e.lngLat.lat, lng: e.lngLat.lng, name: "Water source" });
+      setAddWaterMode?.(false);
+    };
+    map.on("click", handleClick);
+    return () => map.off("click", handleClick);
+  }, [addWaterMode, onAddWaterSpot, exploreMode, setAddWaterMode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -764,6 +782,10 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   // Draggable camp markers
   const onCampPositionsChangeRef = useRef(onCampPositionsChange);
   useEffect(() => { onCampPositionsChangeRef.current = onCampPositionsChange; }, [onCampPositionsChange]);
+  // Keep latest campPositions in a ref so the marker effect can read stored positions
+  // without listing campPositions as a dependency (which would cause re-init loops).
+  const campPositionsRef = useRef(campPositions);
+  useEffect(() => { campPositionsRef.current = campPositions; }, [campPositions]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -779,60 +801,71 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
       onewayLen = d;
     }
     const addMarkers = () => {
+      // positions is a mutable object shared across all dragend closures for this
+      // marker batch so each drag updates the full set before calling the parent.
       const positions = {};
       camps.forEach((day) => {
-        let targetMile = day.endMile;
-        if (tripType === "out-and-back" && onewayLen > 0 && targetMile > onewayLen) {
-          targetMile = 2 * onewayLen - targetMile;
+        // Prefer a previously-dragged position; fall back to equidistant trail point.
+        const stored = campPositionsRef.current?.[day.day];
+        let initPt;
+        if (stored) {
+          initPt = stored;
+        } else {
+          let targetMile = day.endMile;
+          if (tripType === "out-and-back" && onewayLen > 0 && targetMile > onewayLen) {
+            targetMile = 2 * onewayLen - targetMile;
+          }
+          initPt = getPointAtMile(routePoints, Math.max(0, targetMile));
         }
-        const pt = getPointAtMile(routePoints, Math.max(0, targetMile));
-        if (!pt) return;
-        positions[day.day] = { lat: pt.lat, lng: pt.lng };
+        if (!initPt) return;
+        positions[day.day] = { lat: initPt.lat, lng: initPt.lng };
 
         const el = document.createElement("div");
         el.style.cssText = "width:26px;height:26px;background:#10b981;border:2.5px solid #065f46;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:white;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.3);user-select:none;";
         el.textContent = day.day;
         const popup = new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
-          `<div style="font-size:12px"><strong>Camp — Day ${day.day}</strong><br/>Mile ${day.endMile} · ${day.miles} mi today</div>`
+          `<div style="font-size:12px"><strong>Camp — Day ${day.day}</strong><br/>Mile ${day.endMile} · ${day.miles} mi today<br/><em>Drag to reposition along trail</em></div>`
         );
-        const marker = new mapboxgl.Marker({ element: el, draggable: true }).setLngLat([pt.lng, pt.lat]).setPopup(popup).addTo(map);
+        const marker = new mapboxgl.Marker({ element: el, draggable: true }).setLngLat([initPt.lng, initPt.lat]).setPopup(popup).addTo(map);
         el.addEventListener("mouseenter", () => marker.togglePopup());
         el.addEventListener("mouseleave", () => { if (marker.getPopup().isOpen()) marker.togglePopup(); });
         marker.on("dragend", () => {
           const ll = marker.getLngLat();
-          positions[day.day] = { lat: ll.lat, lng: ll.lng };
+          // Snap back to nearest trail point within 0.4 mi
+          const snapped = snapToTrail(routePoints, ll.lat, ll.lng);
+          marker.setLngLat([snapped.lng, snapped.lat]);
+          positions[day.day] = { lat: snapped.lat, lng: snapped.lng };
           if (onCampPositionsChangeRef.current) onCampPositionsChangeRef.current({ ...positions });
         });
         campMarkersRef.current.push(marker);
       });
       if (onCampPositionsChangeRef.current) onCampPositionsChangeRef.current({ ...positions });
     };
-    if (map.isStyleLoaded()) addMarkers(); else map.once("load", addMarkers);
-    return () => { campMarkersRef.current.forEach(m => m.remove()); campMarkersRef.current = []; map.off("load", addMarkers); };
+    // Camp markers are HTML overlays — no need to gate on isStyleLoaded.
+    addMarkers();
+    return () => { campMarkersRef.current.forEach(m => m.remove()); campMarkersRef.current = []; };
   }, [itineraryDays, routePoints]);
 
-  // User-added water spots
+  // User-added water spots — Mapbox HTML markers live in an overlay div above the
+  // canvas and do not require the style to be loaded, so we add them immediately.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     userWaterMarkersRef.current.forEach(m => m.remove());
     userWaterMarkersRef.current = [];
-    const addUserMarkers = () => {
-      (userWaterSpots || []).forEach((spot) => {
-        const el = document.createElement("div");
-        el.style.cssText = "width:24px;height:24px;background:#0891b2;border:2px solid #0e7490;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,0.25);";
-        el.textContent = "💧";
-        const popup = new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
-          `<div style="font-size:12px"><strong>${spot.name || "Water source"}</strong><br/><em>User-added</em></div>`
-        );
-        const marker = new mapboxgl.Marker({ element: el }).setLngLat([spot.lng, spot.lat]).setPopup(popup).addTo(map);
-        el.addEventListener("mouseenter", () => marker.togglePopup());
-        el.addEventListener("mouseleave", () => { if (marker.getPopup().isOpen()) marker.togglePopup(); });
-        userWaterMarkersRef.current.push(marker);
-      });
-    };
-    if (map.isStyleLoaded()) addUserMarkers(); else map.once("load", addUserMarkers);
-    return () => { userWaterMarkersRef.current.forEach(m => m.remove()); userWaterMarkersRef.current = []; map.off("load", addUserMarkers); };
+    (userWaterSpots || []).forEach((spot) => {
+      const el = document.createElement("div");
+      el.style.cssText = "width:24px;height:24px;background:#0891b2;border:2px solid #0e7490;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,0.25);";
+      el.textContent = "💧";
+      const popup = new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
+        `<div style="font-size:12px"><strong>${spot.name || "Water source"}</strong><br/><em>User-added</em></div>`
+      );
+      const marker = new mapboxgl.Marker({ element: el }).setLngLat([spot.lng, spot.lat]).setPopup(popup).addTo(map);
+      el.addEventListener("mouseenter", () => marker.togglePopup());
+      el.addEventListener("mouseleave", () => { if (marker.getPopup().isOpen()) marker.togglePopup(); });
+      userWaterMarkersRef.current.push(marker);
+    });
+    return () => { userWaterMarkersRef.current.forEach(m => m.remove()); userWaterMarkersRef.current = []; };
   }, [userWaterSpots]);
 
   // Crosshair cursor in add-water mode
@@ -1040,6 +1073,7 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
         onAddWaterSpot={onAddWaterSpot}
         addWaterMode={addWaterMode}
         setAddWaterMode={setAddWaterMode}
+        campPositions={campPositions}
         onCampPositionsChange={onCampPositionsChange}
         heightClass="h-[58vh]"
       />
@@ -1468,10 +1502,14 @@ export function PlanView({ onBack, isDark }) {
   const rawMiles = parseFloat(gpxRoute?.length_miles || gpxRoute?.distance_mi || selectedTrail?.length_miles || 0);
   const effectiveMiles = tripType === "out-and-back" ? rawMiles * 2 : rawMiles;
   const milesPerDay = numDays > 0 && effectiveMiles > 0 ? effectiveMiles / numDays : 0;
-  const itineraryDays = Array.from({ length: numDays }, (_, i) => ({
+  // Memoized so the camp-marker effect in MapCanvas doesn't re-run on unrelated renders.
+  const itineraryDays = useMemo(() => Array.from({ length: numDays }, (_, i) => ({
     day: i + 1, startMile: +(i * milesPerDay).toFixed(1), endMile: +((i + 1) * milesPerDay).toFixed(1), miles: +milesPerDay.toFixed(1),
-  }));
-  const routePoints = gpxRoute?.points || (selectedTrail?.geometry?.coordinates || []).map(c => ({ lat: c[1], lng: c[0] }));
+  })), [numDays, milesPerDay]);
+  const routePoints = useMemo(() =>
+    gpxRoute?.points || (selectedTrail?.geometry?.coordinates || []).map(c => ({ lat: c[1], lng: c[0] })),
+    [gpxRoute, selectedTrail]
+  );
 
   const stepIndex = PLAN_STEPS.findIndex((s) => s.id === activeStep);
   const progress = ((stepIndex + 1) / PLAN_STEPS.length) * 100;
