@@ -5,12 +5,13 @@ import "./index.css";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PLAN_STEPS = [
-  { id: "upload",    label: "Route" },
-  { id: "match",     label: "Match" },
-  { id: "dates",     label: "Dates" },
-  { id: "itinerary", label: "Itinerary" },
-  { id: "checks",    label: "Checks" },
-  { id: "report",    label: "Report" },
+  { id: "upload",      label: "Route" },
+  { id: "match",       label: "Match" },
+  { id: "dates",       label: "Dates" },
+  { id: "itinerary",   label: "Itinerary" },
+  { id: "checks",      label: "Checks" },
+  { id: "report",      label: "Plan" },
+  { id: "finalreport", label: "Report" },
 ];
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -205,6 +206,293 @@ function BackBtn({ label = "← Dashboard", onClick }) {
     <button onClick={onClick} className="text-xs uppercase tracking-[0.3em] text-slate-500 hover:text-emerald-600 transition">
       {label}
     </button>
+  );
+}
+
+// ─── Report helpers ───────────────────────────────────────────────────────────
+
+function findNearestRouteIdx(pts, lat, lng) {
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const d = haversineMiles(lat, lng, pts[i].lat, pts[i].lng);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+function computeSegmentElevation(segPts) {
+  let gain = 0, drop = 0;
+  for (let i = 1; i < segPts.length; i++) {
+    if (segPts[i].ele == null || segPts[i - 1].ele == null) continue;
+    const dElev = (segPts[i].ele - segPts[i - 1].ele) * 3.28084;
+    if (dElev > 0) gain += dElev; else drop += -dElev;
+  }
+  return { gainFt: Math.round(gain), dropFt: Math.round(drop) };
+}
+
+function MiniElevProfile({ pts }) {
+  if (!pts?.length) return <p className="text-xs text-slate-400">No data</p>;
+  const elPts = pts.filter(p => p.ele != null).map(p => p.ele * 3.28084);
+  if (elPts.length < 2) return <p className="text-xs text-slate-400">No elevation data</p>;
+  const W = 300, H = 44;
+  const padL = 2, padR = 2, padT = 3, padB = 3;
+  const chartW = W - padL - padR, chartH = H - padT - padB;
+  const minE = Math.min(...elPts), maxE = Math.max(...elPts);
+  const range = maxE - minE || 1;
+  const yS = (e) => padT + chartH - ((e - minE) / range) * chartH;
+  const step = Math.max(1, Math.floor(elPts.length / 80));
+  const sampled = elPts.filter((_, i) => i % step === 0);
+  const linePoints = sampled.map((e, i) => `${(padL + (i / (sampled.length - 1)) * chartW).toFixed(1)},${yS(e).toFixed(1)}`).join(" L ");
+  const areaPath = `M ${padL},${padT + chartH} L ${linePoints} L ${padL + chartW},${padT + chartH} Z`;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H }} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="day-eg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="#10b981" stopOpacity="0.04" />
+        </linearGradient>
+      </defs>
+      <path d={areaPath} fill="url(#day-eg)" />
+      <path d={`M ${linePoints}`} fill="none" stroke="#059669" strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// ─── Export utilities ─────────────────────────────────────────────────────────
+
+function downloadFile(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildGpx(routePoints, campPositions, itineraryDays, userWaterSpots, name) {
+  const wpts = [];
+  (itineraryDays || []).slice(0, -1).forEach(day => {
+    const p = campPositions?.[day.day];
+    if (!p) return;
+    wpts.push(`  <wpt lat="${p.lat.toFixed(7)}" lon="${p.lng.toFixed(7)}"><name>Camp Day ${day.day}</name><sym>Campsite</sym></wpt>`);
+  });
+  (userWaterSpots || []).forEach(s => {
+    wpts.push(`  <wpt lat="${s.lat.toFixed(7)}" lon="${s.lng.toFixed(7)}"><name>${s.name || "Water source"}</name><sym>Water</sym></wpt>`);
+  });
+  const trkpts = (routePoints || []).map(p =>
+    `      <trkpt lat="${p.lat.toFixed(7)}" lon="${p.lng.toFixed(7)}">${p.ele != null ? `<ele>${p.ele.toFixed(1)}</ele>` : ""}</trkpt>`
+  ).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Backcountry Trip Planner" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata><name>${name}</name></metadata>\n${wpts.join("\n")}\n  <trk><name>${name}</name><trkseg>\n${trkpts}\n  </trkseg></trk>\n</gpx>`;
+}
+
+function buildKml(routePoints, campPositions, itineraryDays, userWaterSpots, name) {
+  const marks = [];
+  const coords = (routePoints || []).map(p => `${p.lng.toFixed(7)},${p.lat.toFixed(7)},${(p.ele || 0).toFixed(1)}`).join(" ");
+  marks.push(`    <Placemark><name>${name} — Route</name><Style><LineStyle><color>ff0f766e</color><width>3</width></LineStyle></Style><LineString><tessellate>1</tessellate><coordinates>${coords}</coordinates></LineString></Placemark>`);
+  (itineraryDays || []).slice(0, -1).forEach(day => {
+    const p = campPositions?.[day.day];
+    if (!p) return;
+    marks.push(`    <Placemark><name>Camp Day ${day.day}</name><Style><IconStyle><Icon><href>http://maps.google.com/mapfiles/kml/shapes/campsite.png</href></Icon></IconStyle></Style><Point><coordinates>${p.lng.toFixed(7)},${p.lat.toFixed(7)},0</coordinates></Point></Placemark>`);
+  });
+  (userWaterSpots || []).forEach(s => {
+    marks.push(`    <Placemark><name>${s.name || "Water source"}</name><Style><IconStyle><color>ffebb230</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/water.png</href></Icon></IconStyle></Style><Point><coordinates>${s.lng.toFixed(7)},${s.lat.toFixed(7)},0</coordinates></Point></Placemark>`);
+  });
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n  <Document>\n    <name>${name}</name>\n${marks.join("\n")}\n  </Document>\n</kml>`;
+}
+
+function buildGeoJson(routePoints, campPositions, itineraryDays, userWaterSpots, name) {
+  const features = [];
+  if (routePoints?.length) {
+    features.push({ type: "Feature", properties: { name, type: "route" },
+      geometry: { type: "LineString", coordinates: routePoints.map(p => p.ele != null ? [p.lng, p.lat, p.ele] : [p.lng, p.lat]) } });
+  }
+  (itineraryDays || []).slice(0, -1).forEach(day => {
+    const p = campPositions?.[day.day];
+    if (!p) return;
+    features.push({ type: "Feature", properties: { name: `Camp Day ${day.day}`, type: "camp", day: day.day },
+      geometry: { type: "Point", coordinates: [p.lng, p.lat] } });
+  });
+  (userWaterSpots || []).forEach(s => {
+    features.push({ type: "Feature", properties: { name: s.name || "Water source", type: "water" },
+      geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
+  });
+  return JSON.stringify({ type: "FeatureCollection", features }, null, 2);
+}
+
+// ─── 2D Report Map ─────────────────────────────────────────────────────────────
+
+function ReportMap2D({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, campPositions, itineraryDays, userWaterSpots }) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const campMarkersRef = useRef([]);
+  const waterMarkersRef = useRef([]);
+  const [layerVis, setLayerVis] = useState({ fire: true, snow: true, water: true, camps: true, userWater: true });
+  const [capturing, setCapturing] = useState(false);
+  const [scaleInfo, setScaleInfo] = useState(null);
+
+  // Refs so marker effect doesn't stale-close over props
+  const campPositionsRef = useRef(campPositions);
+  const itineraryDaysRef = useRef(itineraryDays);
+  const userWaterSpotsRef = useRef(userWaterSpots);
+  useEffect(() => { campPositionsRef.current = campPositions; }, [campPositions]);
+  useEffect(() => { itineraryDaysRef.current = itineraryDays; }, [itineraryDays]);
+  useEffect(() => { userWaterSpotsRef.current = userWaterSpots; }, [userWaterSpots]);
+
+  // Map init
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (!token) return;
+    mapboxgl.accessToken = token;
+    const routeCoords = routeFeature?.geometry?.coordinates || [];
+    const center = routeCoords[0] || fallbackCenter || [-120.1287, 38.8649];
+    const map = new mapboxgl.Map({
+      container: containerRef.current,
+      style: "mapbox://styles/mapbox/outdoors-v12",
+      center, zoom: 9, pitch: 0, bearing: 0,
+      preserveDrawingBuffer: true,
+    });
+    mapRef.current = map;
+
+    // Scale bar
+    const updateScale = () => {
+      const zoom = map.getZoom();
+      const lat = map.getCenter().lat;
+      const mPerPx = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, zoom);
+      const targetM = mPerPx * 120;
+      const exp = Math.floor(Math.log10(targetM));
+      const nice = [1, 2, 5].map(n => n * Math.pow(10, exp)).find(c => c >= targetM) || Math.pow(10, exp + 1);
+      const barPx = Math.round(nice / mPerPx);
+      const mi = nice / 1609.34;
+      const label = mi >= 0.2 ? `${mi % 1 === 0 ? mi : mi.toFixed(1)} mi` : `${Math.round(nice)} m`;
+      setScaleInfo({ barPx: Math.min(barPx, 200), label });
+    };
+    map.on("load", updateScale);
+    map.on("move", updateScale);
+
+    map.on("load", () => {
+      if (routeCoords.length >= 2) {
+        map.addSource("route", { type: "geojson", data: routeFeature });
+        map.addLayer({ id: "route-glow", type: "line", source: "route", paint: { "line-color": "#14b8a6", "line-width": 8, "line-opacity": 0.25, "line-blur": 6 } });
+        map.addLayer({ id: "route-line", type: "line", source: "route", paint: { "line-color": "#0f766e", "line-width": 3 } });
+        const b = routeCoords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds(routeCoords[0], routeCoords[0]));
+        map.fitBounds(b, { padding: 60, duration: 0 });
+      }
+      if (firePerimeters?.features?.length) {
+        map.addSource("fire", { type: "geojson", data: firePerimeters });
+        map.addLayer({ id: "fire-fill", type: "fill", source: "fire", paint: { "fill-color": "#f97316", "fill-opacity": 0.22 } });
+        map.addLayer({ id: "fire-out",  type: "line", source: "fire", paint: { "line-color": "#ea580c", "line-width": 1.5 } });
+      }
+      if (snowGeojson?.features?.length) {
+        map.addSource("snow", { type: "geojson", data: snowGeojson });
+        map.addLayer({ id: "snow-pt", type: "circle", source: "snow", paint: { "circle-radius": 8, "circle-color": "#bfdbfe", "circle-stroke-color": "#3b82f6", "circle-stroke-width": 2 } });
+      }
+      if (waterGeojson?.features?.length) {
+        map.addSource("water-osm", { type: "geojson", data: waterGeojson });
+        map.addLayer({ id: "water-pt", type: "circle", source: "water-osm", paint: { "circle-radius": 7, "circle-color": "#22d3ee", "circle-stroke-color": "#0369a1", "circle-stroke-width": 1.5 } });
+      }
+
+      // Camp markers
+      campMarkersRef.current.forEach(m => m.remove());
+      campMarkersRef.current = [];
+      (itineraryDaysRef.current || []).slice(0, -1).forEach(day => {
+        const pos = campPositionsRef.current?.[day.day];
+        if (!pos) return;
+        const el = document.createElement("div");
+        el.style.cssText = "width:22px;height:22px;background:#10b981;border:2.5px solid white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:white;box-shadow:0 2px 6px rgba(0,0,0,0.3);";
+        el.textContent = day.day;
+        campMarkersRef.current.push(new mapboxgl.Marker({ element: el }).setLngLat([pos.lng, pos.lat]).addTo(map));
+      });
+
+      // User water spots
+      waterMarkersRef.current.forEach(m => m.remove());
+      waterMarkersRef.current = [];
+      (userWaterSpotsRef.current || []).forEach(spot => {
+        const el = document.createElement("div");
+        el.style.cssText = "width:26px;height:26px;background:#0891b2;border:2px solid white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 6px rgba(0,0,0,0.3);";
+        el.textContent = "💧";
+        waterMarkersRef.current.push(new mapboxgl.Marker({ element: el }).setLngLat([spot.lng, spot.lat]).addTo(map));
+      });
+    });
+
+    return () => {
+      campMarkersRef.current.forEach(m => m.remove());
+      waterMarkersRef.current.forEach(m => m.remove());
+      map.remove(); mapRef.current = null;
+    };
+  }, []);
+
+  const toggleLayer = (ids, visible) => {
+    const map = mapRef.current;
+    if (!map) return;
+    ids.forEach(id => { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visible ? "visible" : "none"); });
+  };
+
+  const toggleMarkers = (markersRef, visible) => {
+    markersRef.current.forEach(m => { m.getElement().style.display = visible ? "" : "none"; });
+  };
+
+  const handleExportPng = async () => {
+    const map = mapRef.current;
+    if (!map) return;
+    setCapturing(true);
+    await new Promise(r => setTimeout(r, 200));
+    try {
+      const url = map.getCanvas().toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = url; a.download = "trail-map.png"; a.click();
+    } finally { setCapturing(false); }
+  };
+
+  const LAYER_DEFS = [
+    { key: "fire",      ids: ["fire-fill", "fire-out"], label: "Fire",      color: "#ea580c" },
+    { key: "snow",      ids: ["snow-pt"],               label: "Snow",      color: "#3b82f6" },
+    { key: "water",     ids: ["water-pt"],              label: "Water",     color: "#0891b2" },
+    { key: "camps",     ids: [],                        label: "Camps",     color: "#059669", markers: campMarkersRef },
+    { key: "userWater", ids: [],                        label: "My Water",  color: "#0891b2", markers: waterMarkersRef },
+  ];
+
+  return (
+    <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
+      {/* Layer toggles */}
+      <div className="flex items-center gap-4 px-4 py-2.5 bg-white border-b border-slate-100 flex-wrap">
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Layers</span>
+        {LAYER_DEFS.map(({ key, ids, label, color, markers }) => (
+          <label key={key} className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" checked={layerVis[key]} onChange={e => {
+              setLayerVis(p => ({ ...p, [key]: e.target.checked }));
+              if (ids.length) toggleLayer(ids, e.target.checked);
+              if (markers) toggleMarkers(markers, e.target.checked);
+            }} className="rounded accent-emerald-600 w-3.5 h-3.5" />
+            <span className="text-xs font-semibold" style={{ color }}>{label}</span>
+          </label>
+        ))}
+        <button onClick={handleExportPng} disabled={capturing}
+          className="ml-auto rounded-full bg-slate-800 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-700 transition disabled:opacity-50">
+          {capturing ? "Capturing…" : "↓ PNG"}
+        </button>
+      </div>
+
+      {/* Map container */}
+      <div className="relative">
+        <div ref={containerRef} style={{ height: 380 }} className="w-full" />
+
+        {/* Scale bar — spans bottom of map */}
+        {scaleInfo && (
+          <div className="absolute bottom-7 left-1/2 -translate-x-1/2 flex flex-col items-center gap-0.5 pointer-events-none z-10">
+            <div className="relative" style={{ width: scaleInfo.barPx }}>
+              <div className="absolute left-0 bottom-0 h-3 w-0.5 bg-slate-800" />
+              <div className="absolute right-0 bottom-0 h-3 w-0.5 bg-slate-800" />
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-slate-800" />
+              {/* Half-way tick */}
+              <div className="absolute bottom-0 h-2 w-0.5 bg-slate-800" style={{ left: "50%" }} />
+            </div>
+            <span className="text-[10px] font-semibold text-slate-800 bg-white/90 px-1.5 py-0.5 rounded shadow-sm border border-slate-200/70">
+              {scaleInfo.label}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -405,8 +693,8 @@ function UploadStep({ selectedFile, fileInputRef, onFileChange, onUpload, inputM
   return (
     <div className="space-y-8">
       <div className="flex gap-4 p-1 bg-slate-100 rounded-xl w-fit">
-        <button onClick={() => setInputMode("gpx")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${isGpx ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>Upload GPX</button>
         <button onClick={() => setInputMode("name")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${!isGpx ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>Name + Region</button>
+        <button onClick={() => setInputMode("gpx")} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${isGpx ? "bg-white shadow text-slate-900" : "text-slate-500"}`}>Upload GPX</button>
       </div>
       <div className="rounded-[32px] border border-emerald-100 bg-gradient-to-br from-white via-white to-emerald-50/40 p-10 shadow-lg shadow-emerald-200/30">
         {isGpx ? (
@@ -1175,7 +1463,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   );
 }
 
-function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, onRemoveWaterSpot, addWaterMode, setAddWaterMode, campPositions, onCampPositionsChange, isDark }) {
+function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, onRemoveWaterSpot, addWaterMode, setAddWaterMode, campPositions, onCampPositionsChange, isDark, onAiReport, onContinueToReport }) {
   const [aiReport, setAiReport] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const hasFiredRef = useRef(false);
@@ -1249,6 +1537,7 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
       });
       const data = await res.json();
       setAiReport(data);
+      if (onAiReport) onAiReport(data);
     } catch { setAiReport({ error: "Could not reach AI" }); }
     setAiLoading(false);
   };
@@ -1483,6 +1772,16 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
             </div>
           )}
 
+          {/* ── Continue to final report ── */}
+          {onContinueToReport && (
+            <div className="border-t border-slate-100 pt-6 flex justify-end">
+              <button onClick={onContinueToReport}
+                className="rounded-full bg-emerald-600 px-8 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 hover:bg-emerald-700 transition">
+                Continue to Report →
+              </button>
+            </div>
+          )}
+
           {/* ── Water sources ── */}
           {(osmWater.length > 0 || userWaterSpots?.length > 0) && (
             <div>
@@ -1505,6 +1804,260 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
           )}
 
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Final Report Step ────────────────────────────────────────────────────────
+
+function FinalReportStep({ planResult, selectedTrail, startDate, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, campPositions, aiReport }) {
+  const checks = planResult?.checks;
+  const mapLayers = planResult?.map_layers;
+  const route = planResult?.route;
+  const ai = aiReport?.sections;
+
+  const firePerimeters = mapLayers?.fire_perimeters || checks?.fire?.perimeters || null;
+  const snowGeojson    = checks?.snow?.geojson || null;
+  const waterGeojson   = checks?.water?.geojson || null;
+  const osmWater       = checks?.water?.geojson?.features || [];
+
+  let routeFeature = routeToFeature(route) || toLineFeature(mapLayers?.route) || toLineFeature(selectedTrail?.geometry);
+  if (tripType === "out-and-back" && routeFeature?.geometry?.coordinates?.length >= 10) {
+    const fwd = routeFeature.geometry.coordinates;
+    const first = fwd[0], last = fwd[fwd.length - 1];
+    if (!(Math.abs(first[0] - last[0]) < 0.001 && Math.abs(first[1] - last[1]) < 0.001)) {
+      routeFeature = { ...routeFeature, geometry: { type: "LineString", coordinates: [...fwd, ...[...fwd].reverse().slice(1)] } };
+    }
+  }
+  const fallbackCenter = selectedTrail ? [selectedTrail.lng, selectedTrail.lat] : null;
+
+  const totalMiles = rawMiles > 0
+    ? (tripType === "out-and-back" ? rawMiles * 2 : rawMiles)
+    : parseFloat(route?.length_miles || selectedTrail?.length_miles || 0);
+
+  const daytimePeriods = getDaytimePeriods(checks?.weather?.forecast);
+
+  const dayDates = itineraryDays?.map((_, i) => {
+    if (!startDate) return null;
+    const d = new Date(startDate + "T12:00:00");
+    d.setDate(d.getDate() + i);
+    return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  }) || [];
+
+  // Build per-day route segments from camp positions (or equidistant split)
+  const daySegments = (itineraryDays || []).map((day, i) => {
+    let segPts = [];
+    if (routePoints?.length) {
+      const prevCampPos = i === 0 ? null : campPositions?.[i];
+      const thisCampPos = day.day < (itineraryDays?.length || 0) ? campPositions?.[day.day] : null;
+      const startIdx = prevCampPos ? findNearestRouteIdx(routePoints, prevCampPos.lat, prevCampPos.lng) : 0;
+      const endIdx   = thisCampPos ? findNearestRouteIdx(routePoints, thisCampPos.lat, thisCampPos.lng) : routePoints.length - 1;
+      segPts = routePoints.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
+    }
+    const { gainFt, dropFt } = computeSegmentElevation(segPts);
+    const midPt = segPts[Math.floor(segPts.length / 2)] || null;
+    return { ...day, segPts, gainFt, dropFt, midPt };
+  });
+
+  const nearbyRecentFires = (checks?.fire?.perimeters?.features || []).filter(f => {
+    const d = f.properties?.distance_from_midpoint_mi;
+    const days = f.properties?.days_since_update;
+    return (d == null || d <= 5) && (days == null || days <= 365);
+  });
+
+  const handlePrint = () => window.print();
+
+  return (
+    <div className="bg-white min-h-screen">
+      {/* Print CSS injected via style tag */}
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          body { background: white; }
+          .page-break { page-break-before: always; }
+          .avoid-break { page-break-inside: avoid; }
+        }
+      `}</style>
+
+      {/* ── Report header ── */}
+      <div className="border-b border-slate-100 bg-white sticky top-0 z-10 no-print">
+        <div className="max-w-5xl mx-auto px-6 py-4 sm:px-8 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.4em] text-slate-400">Final Report</p>
+            <h2 className="text-xl font-bold text-slate-900 mt-0.5">{selectedTrail?.name || "Custom Route"}</h2>
+          </div>
+          <button onClick={handlePrint}
+            className="rounded-full bg-slate-800 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 transition shrink-0">
+            Print / Save PDF
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-5xl mx-auto px-6 pb-16 sm:px-8 space-y-12 pt-8">
+
+        {/* ── Trip summary line ── */}
+        <div className="flex flex-wrap gap-6 items-start">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">{selectedTrail?.name || "Custom Route"}</h1>
+            <p className="mt-1 text-slate-500 text-sm">
+              {selectedTrail?.area && <>{selectedTrail.area} · </>}
+              {totalMiles > 0 && <>{totalMiles.toFixed(1)} mi · </>}
+              {itineraryDays?.length || 0} days
+              {startDate && <> · starts {startDate}</>}
+            </p>
+          </div>
+          {nearbyRecentFires.length > 0 && (
+            <span className="rounded-full bg-amber-500 text-white px-4 py-1.5 text-sm font-bold">⚠ Fire Caution</span>
+          )}
+        </div>
+
+        {/* ── 2D Map with layer toggles ── */}
+        <section className="no-print">
+          <p className="text-[10px] uppercase tracking-[0.4em] text-slate-400 mb-3">Interactive Map</p>
+          <ReportMap2D
+            routeFeature={routeFeature}
+            firePerimeters={firePerimeters}
+            snowGeojson={snowGeojson}
+            waterGeojson={waterGeojson}
+            fallbackCenter={fallbackCenter}
+          />
+          <p className="text-[10px] text-slate-400 mt-2">Toggle layers above · Export PNG for offline use · Use Print to save as PDF</p>
+        </section>
+
+        {/* ── Pack list ── */}
+        {ai?.gear_adds?.length > 0 && (
+          <section className="avoid-break">
+            <p className="text-[10px] uppercase tracking-[0.4em] text-slate-400 mb-4">Pack List Additions</p>
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-6">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {ai.gear_adds.map((item, i) => (
+                  <label key={i} className="flex items-start gap-3 cursor-pointer group">
+                    <span className="mt-0.5 h-4 w-4 shrink-0 rounded border-2 border-slate-300 group-hover:border-emerald-500 transition" />
+                    <span className="text-sm text-slate-700">{item}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ── Day-by-day ── */}
+        <section>
+          <p className="text-[10px] uppercase tracking-[0.4em] text-slate-400 mb-5">Day by Day</p>
+          <div className="space-y-6">
+            {daySegments.map((day, i) => {
+              const period = daytimePeriods[i];
+              const wText  = (period?.short || "").toLowerCase();
+              const isWarn = /thunder|severe/.test(wText);
+              const isCaution = /shower|rain|drizzle|snow/.test(wText);
+
+              // Water near this day's midpoint
+              const nearWater = day.midPt
+                ? osmWater.filter(f => {
+                    const coords = f.geometry?.coordinates;
+                    if (!coords) return false;
+                    return haversineMiles(day.midPt.lat, day.midPt.lng, coords[1], coords[0]) < 4;
+                  }).slice(0, 4)
+                : [];
+              const nearUserWater = day.midPt
+                ? (userWaterSpots || []).filter(s => haversineMiles(day.midPt.lat, day.midPt.lng, s.lat, s.lng) < 4)
+                : [];
+
+              return (
+                <div key={day.day} className="rounded-2xl border border-slate-200 overflow-hidden shadow-sm avoid-break">
+                  {/* ── Day header ── */}
+                  <div className="flex items-center justify-between px-6 py-4 bg-slate-900 text-white">
+                    <div className="flex items-center gap-4">
+                      <span className="h-9 w-9 shrink-0 rounded-full bg-emerald-500 flex items-center justify-center text-sm font-bold">{day.day}</span>
+                      <div>
+                        <p className="font-semibold text-base">{dayDates[i] || `Day ${day.day}`}</p>
+                        <p className="text-slate-400 text-xs mt-0.5">
+                          {day.miles} mi &nbsp;·&nbsp;
+                          <span className="text-emerald-400">↑{day.gainFt.toLocaleString()} ft</span>
+                          &nbsp;·&nbsp;
+                          <span className="text-sky-400">↓{day.dropFt.toLocaleString()} ft</span>
+                        </p>
+                      </div>
+                    </div>
+                    {(isWarn || isCaution) && (
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${isWarn ? "bg-amber-500 text-white" : "bg-yellow-400 text-yellow-900"}`}>
+                        {isWarn ? "⚠ Storm" : "🌧 Rain"}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-slate-100">
+                    {/* ── Weather column ── */}
+                    <div className="px-5 py-4">
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-slate-400 mb-2">Weather</p>
+                      {period ? (
+                        <>
+                          <p className="text-sm font-semibold text-slate-800">{period.short}</p>
+                          <p className="text-xs text-slate-500 mt-1">{period.temp}{period.temp_unit} · {period.wind}</p>
+                        </>
+                      ) : (
+                        <p className="text-xs text-slate-400">No forecast</p>
+                      )}
+                    </div>
+
+                    {/* ── Elevation column ── */}
+                    <div className="px-5 py-4">
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-slate-400 mb-2">Elevation</p>
+                      <MiniElevProfile pts={day.segPts} />
+                      <div className="flex justify-between text-[9px] text-slate-400 mt-1.5">
+                        <span>Mi {day.startMile}</span>
+                        <span className="text-emerald-600 font-medium">↑{day.gainFt.toLocaleString()} ↓{day.dropFt.toLocaleString()} ft</span>
+                        <span>Mi {day.endMile}</span>
+                      </div>
+                    </div>
+
+                    {/* ── Water column ── */}
+                    <div className="px-5 py-4">
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-slate-400 mb-2">Water Sources</p>
+                      {nearWater.length > 0 || nearUserWater.length > 0 ? (
+                        <div className="space-y-1.5">
+                          {nearWater.map((f, j) => (
+                            <div key={j} className="flex items-center gap-2 text-xs">
+                              <span className="text-cyan-500 shrink-0">💧</span>
+                              <span className="text-slate-700 truncate">{f.properties?.name || f.properties?.water_type || "Water"}</span>
+                              <span className="text-slate-400 shrink-0 ml-auto">{f.properties?.distance_mi} mi</span>
+                            </div>
+                          ))}
+                          {nearUserWater.map((s, j) => (
+                            <div key={`u${j}`} className="flex items-center gap-2 text-xs">
+                              <span className="text-cyan-600 shrink-0">💧</span>
+                              <span className="text-slate-700 truncate">{s.name}</span>
+                              <span className="text-slate-400 shrink-0 ml-auto">user</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-400">None found nearby</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* ── AI timing notes ── */}
+        {ai?.timing_notes?.length > 0 && (
+          <section className="avoid-break">
+            <p className="text-[10px] uppercase tracking-[0.4em] text-slate-400 mb-4">Timing Notes</p>
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-6 space-y-2">
+              {ai.timing_notes.map((note, i) => (
+                <div key={i} className="flex items-start gap-3 text-sm text-slate-700">
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />
+                  {note}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
       </div>
     </div>
   );
@@ -1733,7 +2286,7 @@ export function PlanView({ onBack, isDark }) {
   const [checksLoading, setChecksLoading] = useState({ weather: false, aqi: false, fire: false, snow: false, water: false });
   const [planResult, setPlanResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [inputMode, setInputMode] = useState("gpx");
+  const [inputMode, setInputMode] = useState("name");
   const [trailName, setTrailName] = useState("");
   const [nameSearchResults, setNameSearchResults] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -1742,6 +2295,7 @@ export function PlanView({ onBack, isDark }) {
   const handleRemoveWaterSpot = (lng, lat) =>
     setUserWaterSpots(prev => prev.filter(s => !(s.lng === lng && s.lat === lat)));
   const [campPositions, setCampPositions] = useState({});
+  const [aiReport, setAiReport] = useState(null);
   const fileInputRef = useRef(null);
 
   // Derived values
@@ -1903,6 +2457,7 @@ export function PlanView({ onBack, isDark }) {
   // ── Render ──
 
   const isReportStep = activeStep === "report";
+  const isFinalReportStep = activeStep === "finalreport";
 
   return (
     <div className={`min-h-screen ${isDark ? "bg-black text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
@@ -1940,7 +2495,20 @@ export function PlanView({ onBack, isDark }) {
       </header>
 
       <main>
-        {isReportStep ? (
+        {isFinalReportStep ? (
+          <FinalReportStep
+            planResult={planResult}
+            selectedTrail={selectedTrail}
+            startDate={startDate}
+            itineraryDays={itineraryDays}
+            routePoints={routePoints}
+            tripType={tripType}
+            rawMiles={rawMiles}
+            userWaterSpots={userWaterSpots}
+            campPositions={campPositions}
+            aiReport={aiReport}
+          />
+        ) : isReportStep ? (
         <ReportStep
           planResult={planResult}
           selectedTrail={selectedTrail}
@@ -1957,6 +2525,8 @@ export function PlanView({ onBack, isDark }) {
           campPositions={campPositions}
           onCampPositionsChange={setCampPositions}
           isDark={isDark}
+          onAiReport={setAiReport}
+          onContinueToReport={() => goTo("finalreport")}
         />
         ) : (
           <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10">

@@ -70,6 +70,14 @@ button {
   color: #f2f2f7 !important;
 }
 
+:root[data-theme="dark"] [class*="text-slate-800"] {
+  color: #d1d1d6 !important;
+}
+
+:root[data-theme="dark"] [class*="text-slate-700"] {
+  color: #c7c7cc !important;
+}
+
 :root[data-theme="dark"] [class*="text-slate-600"] {
   color: #aeaeb2 !important;
 }
