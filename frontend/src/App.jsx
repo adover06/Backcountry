@@ -459,9 +459,6 @@ function MatchStep({ route, trailMatch, selectedTrailId, onTrailSelect, onNext, 
 }
 
 function ItineraryStep({ route, selectedTrail, startDate, numDays, setNumDays, tripType, setTripType, onNext }) {
-  const [aiBriefing, setAiBriefing] = useState(null);
-  const [aiLoading, setAiLoading] = useState(false);
-
   const rawMiles = parseFloat(route?.length_miles || route?.distance_mi || selectedTrail?.length_miles || 0);
   const effectiveMiles = tripType === "out-and-back" ? rawMiles * 2 : rawMiles;
   const milesPerDay = numDays > 0 && effectiveMiles > 0 ? effectiveMiles / numDays : 0;
@@ -472,30 +469,6 @@ function ItineraryStep({ route, selectedTrail, startDate, numDays, setNumDays, t
     endMile: +((i + 1) * milesPerDay).toFixed(1),
     miles: +milesPerDay.toFixed(1),
   }));
-
-  const fetchAiBriefing = async () => {
-    if (!selectedTrail && !route) return;
-    setAiLoading(true);
-    setAiBriefing(null);
-    try {
-      const res = await fetch("/api/plan/itinerary", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trail_name: selectedTrail?.name || "Custom route",
-          area: selectedTrail?.area || "",
-          total_miles: effectiveMiles,
-          trip_type: tripType,
-          num_days: numDays,
-          days,
-          checks: {},
-        }),
-      });
-      const data = await res.json();
-      setAiBriefing(data);
-    } catch { setAiBriefing({ error: "Could not reach AI" }); }
-    setAiLoading(false);
-  };
 
   const btnBase = "rounded-full px-5 py-2 text-sm font-semibold transition";
   const btnActive = "bg-emerald-600 text-white";
@@ -557,30 +530,7 @@ function ItineraryStep({ route, selectedTrail, startDate, numDays, setNumDays, t
         </div>
       )}
 
-      {/* AI Briefing */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
-          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">AI trip briefing</p>
-          <button onClick={fetchAiBriefing} disabled={aiLoading}
-            className="rounded-full border border-emerald-300 px-4 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition disabled:opacity-50">
-            {aiLoading ? "Generating…" : aiBriefing ? "Regenerate" : "Generate"}
-          </button>
-        </div>
-        {aiLoading && (
-          <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner /> Asking AI for a trip briefing…</div>
-        )}
-        {aiBriefing?.error && !aiLoading && (
-          <p className="text-sm text-red-500">{aiBriefing.error}</p>
-        )}
-        {aiBriefing?.text && !aiLoading && (
-          <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{aiBriefing.text}</p>
-        )}
-        {!aiBriefing && !aiLoading && (
-          <p className="text-sm text-slate-400">Hit Generate for an AI day-by-day trail briefing.</p>
-        )}
-      </div>
-
-      <p className="text-xs text-slate-400">Camp markers are draggable on the report map.</p>
+      <p className="text-xs text-slate-400">Camp markers are draggable on the report map. An AI situation brief will generate automatically once checks complete.</p>
 
       <button onClick={onNext}
         className="rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-700">
@@ -650,13 +600,22 @@ function ChecksStep({ checks, checksLoading, onNext }) {
 
 // ─── Map components ───────────────────────────────────────────────────────────
 
-function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, heightClass, onCampPositionsChange, campPositions }) {
+function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fallbackCenter, report, checks, selectedTrail, route, exploreMode = false, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, onRemoveWaterSpot, addWaterMode, setAddWaterMode, heightClass, onCampPositionsChange, campPositions }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const campMarkersRef = useRef([]);
   const userWaterMarkersRef = useRef([]);
   const fireCount = getFireCount(firePerimeters);
   const styleUrl = "mapbox://styles/mapbox/outdoors-v12";
+
+  // Local UI state
+  const [is3D, setIs3D] = useState(true);
+  const [showHelp, setShowHelp] = useState(false);
+  const [scaleInfo, setScaleInfo] = useState(null);
+
+  // Ref so remove-button closures inside marker DOM don't go stale
+  const onRemoveWaterSpotRef = useRef(onRemoveWaterSpot);
+  useEffect(() => { onRemoveWaterSpotRef.current = onRemoveWaterSpot; }, [onRemoveWaterSpot]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -735,6 +694,32 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
 
     return () => { map.remove(); mapRef.current = null; };
   }, [styleUrl]);
+
+  // Adaptive scale bar — updates on every map move/zoom
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const update = () => {
+      const zoom = map.getZoom();
+      const lat = map.getCenter().lat;
+      const metersPerPx = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, zoom);
+      const targetM = metersPerPx * 90;
+      const exp = Math.floor(Math.log10(targetM));
+      const nice = [1, 2, 5].map(n => n * Math.pow(10, exp)).find(c => c >= targetM) || Math.pow(10, exp + 1);
+      const barPx = Math.round(nice / metersPerPx);
+      const ft = nice * 3.28084;
+      const mi = nice / 1609.34;
+      let label;
+      if (mi >= 0.2)      label = `${mi % 1 === 0 ? mi : mi.toFixed(mi < 2 ? 1 : 0)} mi`;
+      else if (ft < 1000) label = `${Math.round(ft)} ft`;
+      else                label = `${nice >= 1000 ? (nice/1000).toFixed(nice % 1000 === 0 ? 0 : 1) + " km" : nice + " m"}`;
+      setScaleInfo({ barPx: Math.min(barPx, 160), label });
+    };
+    map.on("load", update);
+    map.on("move", update);
+    if (map.isStyleLoaded()) update();
+    return () => { map.off("load", update); map.off("move", update); };
+  }, []);
 
   // Water source click handler — re-registered whenever addWaterMode changes so it
   // always closes over the current values. Cleanup removes the old listener each time.
@@ -853,14 +838,34 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
     if (!map) return;
     userWaterMarkersRef.current.forEach(m => m.remove());
     userWaterMarkersRef.current = [];
-    (userWaterSpots || []).forEach((spot) => {
+    (userWaterSpots || []).forEach((spot, idx) => {
+      // Wrapper keeps the × button absolutely positioned without distorting the circle
+      const wrapper = document.createElement("div");
+      wrapper.style.cssText = "position:relative;width:28px;height:28px;";
+
       const el = document.createElement("div");
-      el.style.cssText = "width:24px;height:24px;background:#0891b2;border:2px solid #0e7490;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,0.25);";
+      el.style.cssText = "width:28px;height:28px;background:#0891b2;border:2px solid #0e7490;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,0.3);";
       el.textContent = "💧";
-      const popup = new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
-        `<div style="font-size:12px"><strong>${spot.name || "Water source"}</strong><br/><em>User-added</em></div>`
+
+      // Remove button — appears on hover via CSS class toggle
+      const removeBtn = document.createElement("button");
+      removeBtn.style.cssText = "position:absolute;top:-5px;right:-5px;width:16px;height:16px;background:#ef4444;border:1.5px solid #fff;border-radius:50%;color:white;font-size:11px;font-weight:700;line-height:1;cursor:pointer;display:none;align-items:center;justify-content:center;padding:0;z-index:1;";
+      removeBtn.textContent = "×";
+      removeBtn.title = "Remove water source";
+      removeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (onRemoveWaterSpotRef.current) onRemoveWaterSpotRef.current(spot.lng, spot.lat);
+      });
+
+      wrapper.appendChild(el);
+      wrapper.appendChild(removeBtn);
+      wrapper.addEventListener("mouseenter", () => { removeBtn.style.display = "flex"; });
+      wrapper.addEventListener("mouseleave", () => { removeBtn.style.display = "none"; });
+
+      const popup = new mapboxgl.Popup({ offset: 22, closeButton: false }).setHTML(
+        `<div style="font-size:12px"><strong>${spot.name || "Water source"}</strong><br/><em>User-added · click × to remove</em></div>`
       );
-      const marker = new mapboxgl.Marker({ element: el }).setLngLat([spot.lng, spot.lat]).setPopup(popup).addTo(map);
+      const marker = new mapboxgl.Marker({ element: wrapper }).setLngLat([spot.lng, spot.lat]).setPopup(popup).addTo(map);
       el.addEventListener("mouseenter", () => marker.togglePopup());
       el.addEventListener("mouseleave", () => { if (marker.getPopup().isOpen()) marker.togglePopup(); });
       userWaterMarkersRef.current.push(marker);
@@ -955,15 +960,112 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
         </div>
       ) : null}
 
-      {/* Add water source button (plan mode only) */}
+      {/* ── Right-side control strip ── */}
+      <div className="pointer-events-auto absolute right-3 top-1/2 -translate-y-1/2 flex flex-col gap-1.5 z-10">
+        {/* 2D / 3D toggle */}
+        <button
+          title={is3D ? "Switch to flat 2D view" : "Switch to 3D terrain view"}
+          onClick={() => {
+            const map = mapRef.current;
+            if (!map) return;
+            const next = !is3D;
+            setIs3D(next);
+            map.easeTo({ pitch: next ? 45 : 0, bearing: next ? -12 : 0, duration: 600 });
+          }}
+          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-[11px] font-bold text-slate-700 hover:bg-white transition flex items-center justify-center">
+          {is3D ? "2D" : "3D"}
+        </button>
+
+        <div className="h-px bg-slate-300/60 mx-1" />
+
+        {/* Zoom in */}
+        <button title="Zoom in" onClick={() => mapRef.current?.zoomIn({ duration: 250 })}
+          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-lg font-light text-slate-700 hover:bg-white transition flex items-center justify-center leading-none">
+          +
+        </button>
+        {/* Zoom out */}
+        <button title="Zoom out" onClick={() => mapRef.current?.zoomOut({ duration: 250 })}
+          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-lg font-light text-slate-700 hover:bg-white transition flex items-center justify-center leading-none">
+          −
+        </button>
+
+        <div className="h-px bg-slate-300/60 mx-1" />
+
+        {/* Reset north */}
+        <button title="Reset to north" onClick={() => mapRef.current?.resetNorth({ duration: 500 })}
+          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-slate-700 hover:bg-white transition flex items-center justify-center"
+          style={{ fontSize: 15 }}>
+          ↑
+        </button>
+
+        {/* Fit route */}
+        {routeFeature?.geometry?.coordinates?.length > 0 && (
+          <button title="Fit route to view" onClick={() => {
+            const map = mapRef.current;
+            if (!map) return;
+            const coords = routeFeature.geometry.coordinates;
+            const bounds = coords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
+            map.fitBounds(bounds, { padding: 80, duration: 700 });
+          }}
+          className="w-9 h-9 rounded-xl bg-white/90 shadow-md border border-slate-200/60 text-slate-700 hover:bg-white transition flex items-center justify-center"
+          style={{ fontSize: 13 }}>
+          ⊡
+        </button>
+        )}
+
+        <div className="h-px bg-slate-300/60 mx-1" />
+
+        {/* Help toggle */}
+        <button title="Map controls" onClick={() => setShowHelp(h => !h)}
+          className={`w-9 h-9 rounded-xl shadow-md border text-xs font-bold transition flex items-center justify-center ${showHelp ? "bg-slate-700 text-white border-slate-600" : "bg-white/90 border-slate-200/60 text-slate-500 hover:bg-white"}`}>
+          ?
+        </button>
+      </div>
+
+      {/* ── Keyboard / interaction help panel ── */}
+      {showHelp && (
+        <div className="pointer-events-auto absolute right-14 top-1/2 -translate-y-1/2 w-52 rounded-2xl border border-slate-200/70 bg-white/95 p-4 shadow-2xl backdrop-blur z-10 text-xs text-slate-700">
+          <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400 mb-3">Map Controls</p>
+          <ul className="space-y-2">
+            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Drag</span><span className="text-slate-500">Pan the map</span></li>
+            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Scroll</span><span className="text-slate-500">Zoom in/out</span></li>
+            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Ctrl + drag</span><span className="text-slate-500">Rotate &amp; tilt</span></li>
+            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Shift + drag</span><span className="text-slate-500">Box zoom</span></li>
+            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Double-click</span><span className="text-slate-500">Zoom in</span></li>
+            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Right-drag</span><span className="text-slate-500">Rotate bearing</span></li>
+            <li className="flex gap-2"><span className="font-semibold w-28 shrink-0">Two-finger drag</span><span className="text-slate-500">Tilt &amp; rotate</span></li>
+          </ul>
+          <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+            <li className="flex gap-2 list-none"><span className="font-semibold w-28 shrink-0">⊡ button</span><span className="text-slate-500">Re-fit route</span></li>
+            <li className="flex gap-2 list-none"><span className="font-semibold w-28 shrink-0">↑ button</span><span className="text-slate-500">Point north</span></li>
+            <li className="flex gap-2 list-none"><span className="font-semibold w-28 shrink-0">2D/3D button</span><span className="text-slate-500">Toggle terrain pitch</span></li>
+            <li className="flex gap-2 list-none"><span className="font-semibold w-28 shrink-0">💧 + ×</span><span className="text-slate-500">Hover to remove water source</span></li>
+          </div>
+        </div>
+      )}
+
+      {/* ── Scale bar ── */}
+      {scaleInfo && (
+        <div className="pointer-events-none absolute bottom-14 left-6 flex flex-col items-start gap-0.5 z-10">
+          <div className="flex items-end gap-1">
+            <div style={{ width: scaleInfo.barPx }} className="h-1 bg-slate-800 rounded-sm relative">
+              <div className="absolute left-0 top-0 h-2.5 w-0.5 bg-slate-800 -translate-y-1" />
+              <div className="absolute right-0 top-0 h-2.5 w-0.5 bg-slate-800 -translate-y-1" />
+            </div>
+          </div>
+          <span className="text-[10px] font-semibold text-slate-800 bg-white/80 rounded px-1 leading-tight">{scaleInfo.label}</span>
+        </div>
+      )}
+
+      {/* ── Add water source button (plan mode only) ── */}
       {!exploreMode && onAddWaterSpot && (
-        <div className="pointer-events-auto absolute bottom-6 right-6 flex flex-col items-end gap-1">
+        <div className="pointer-events-auto absolute bottom-5 right-3 flex flex-col items-end gap-1.5">
           <button onClick={() => setAddWaterMode?.(m => !m)}
-            className={`rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition backdrop-blur ${addWaterMode ? "bg-cyan-600 text-white" : "bg-white/90 text-cyan-700 border border-cyan-200 hover:bg-cyan-50"}`}>
-            {addWaterMode ? "Click map to place · tap again to stop" : "+ Add water source"}
+            className={`rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition backdrop-blur ${addWaterMode ? "bg-cyan-600 text-white ring-2 ring-cyan-400" : "bg-white/90 text-cyan-700 border border-cyan-200 hover:bg-cyan-50"}`}>
+            {addWaterMode ? "Click map to place · click again to stop" : "+ Add water source"}
           </button>
           {(userWaterSpots?.length || 0) > 0 && !addWaterMode && (
-            <span className="text-[10px] text-white/70">{userWaterSpots.length} user-added</span>
+            <span className="text-[10px] text-white/70 bg-black/30 rounded-full px-2 py-0.5 backdrop-blur">{userWaterSpots.length} added · hover to remove</span>
           )}
         </div>
       )}
@@ -973,9 +1075,10 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   );
 }
 
-function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, addWaterMode, setAddWaterMode, campPositions, onCampPositionsChange, isDark }) {
+function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, routePoints, tripType, rawMiles, userWaterSpots, onAddWaterSpot, onRemoveWaterSpot, addWaterMode, setAddWaterMode, campPositions, onCampPositionsChange, isDark }) {
   const [aiReport, setAiReport] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const hasFiredRef = useRef(false);
 
   const route = planResult?.route;
   const mapLayers = planResult?.map_layers;
@@ -1026,7 +1129,7 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
   // Water sources from OSM, closest 5
   const osmWater = checks?.water?.geojson?.features?.slice(0, 5) || [];
 
-  const fetchAiReport = async () => {
+  const callAiReport = async () => {
     if (!checks) return;
     setAiLoading(true);
     setAiReport(null);
@@ -1050,6 +1153,14 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
     setAiLoading(false);
   };
 
+  // Auto-fire once when checks are available
+  useEffect(() => {
+    if (checks && !hasFiredRef.current) {
+      hasFiredRef.current = true;
+      callAiReport();
+    }
+  }, [checks]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const ai = aiReport?.sections;
 
   return (
@@ -1071,6 +1182,7 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
         rawMiles={rawMiles}
         userWaterSpots={userWaterSpots}
         onAddWaterSpot={onAddWaterSpot}
+        onRemoveWaterSpot={onRemoveWaterSpot}
         addWaterMode={addWaterMode}
         setAddWaterMode={setAddWaterMode}
         campPositions={campPositions}
@@ -1096,24 +1208,36 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
             <span className={`rounded-full px-5 py-2 text-sm font-bold text-white ${riskColor.badge}`}>{riskColor.label}</span>
           </div>
 
-          {/* ── AI overview (template placeholder + AI fill) ── */}
+          {/* ── Situation Brief (AI — auto-generated) ── */}
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Overview</p>
-              <button onClick={fetchAiReport} disabled={aiLoading}
-                className="rounded-full border border-emerald-300 px-4 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition disabled:opacity-40">
-                {aiLoading ? "Generating…" : aiReport ? "Regenerate AI" : "Generate AI Report"}
-              </button>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Situation Brief</p>
+              {(aiReport || (!aiLoading)) && (
+                <button onClick={callAiReport} disabled={aiLoading}
+                  className="rounded-full border border-slate-200 px-3 py-1 text-[10px] font-semibold text-slate-500 hover:border-emerald-300 hover:text-emerald-700 transition disabled:opacity-40">
+                  Regenerate
+                </button>
+              )}
             </div>
-            {aiLoading && <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner size={3} />Asking AI for a trip overview — this may take up to 30 seconds…</div>}
+
+            {/* Loading state */}
+            {aiLoading && (
+              <div className="flex items-center gap-2 text-sm text-slate-400">
+                <Spinner size={3} />Analyzing conditions…
+              </div>
+            )}
+
+            {/* Error state */}
             {aiReport?.error && !aiLoading && (
-              <p className="text-sm text-red-500">AI error: {aiReport.error}</p>
+              <p className="text-sm text-red-400">{aiReport.error}</p>
             )}
-            {ai?.overview ? (
-              <p className="text-sm text-slate-700 leading-relaxed">{ai.overview}</p>
-            ) : !aiLoading && !aiReport?.error && (
-              <p className="text-sm text-slate-400 italic">Hit "Generate AI Report" for a narrative overview of this trip.</p>
+
+            {/* Situation Brief */}
+            {ai?.situation_brief && !aiLoading && (
+              <p className="text-sm text-slate-700 leading-relaxed">{ai.situation_brief}</p>
             )}
+
+            {/* Risk flags below the brief */}
             {risk.reasons?.length > 0 && (
               <ul className="mt-4 space-y-1 pt-4 border-t border-slate-100">
                 {risk.reasons.map((r, i) => (
@@ -1162,13 +1286,44 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
                 </div>
               ))}
             </div>
-            {/* AI conditions narrative */}
-            {ai?.conditions && (
-              <div className="rounded-xl bg-slate-50 border border-slate-200 px-5 py-3">
-                <p className="text-xs text-slate-500 leading-relaxed">{ai.conditions}</p>
-              </div>
-            )}
           </div>
+
+          {/* ── Gear & Timing cards (AI structured output) ── */}
+          {(ai?.gear_adds?.length > 0 || ai?.timing_notes?.length > 0 || aiLoading) && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {/* Gear */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400 mb-3">Pack List Additions</p>
+                {aiLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner size={3} />Generating…</div>
+                ) : ai?.gear_adds?.length > 0 ? (
+                  <ul className="space-y-2">
+                    {ai.gear_adds.map((item, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />{item}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+
+              {/* Timing */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400 mb-3">Timing Notes</p>
+                {aiLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner size={3} />Generating…</div>
+                ) : ai?.timing_notes?.length > 0 ? (
+                  <ul className="space-y-2">
+                    {ai.timing_notes.map((note, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
+                        <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />{note}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            </div>
+          )}
 
           {/* ── Day-by-day ── */}
           {itineraryDays?.length > 0 && (
@@ -1181,7 +1336,6 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
                   const isWarn = /thunder|severe/.test(wText);
                   const isCaution = /shower|rain|drizzle|snow/.test(wText);
                   const camp = campPositions?.[day.day];
-                  const aiDay = ai?.days?.[i];
                   return (
                     <div key={day.day} className="rounded-2xl bg-white border border-slate-100 shadow-sm overflow-hidden">
                       {/* Day header */}
@@ -1221,15 +1375,6 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
                           </div>
                         )}
 
-                        {/* AI day narrative */}
-                        {aiDay ? (
-                          <div className="flex items-start gap-3">
-                            <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400 mt-0.5 w-16 shrink-0">Notes</span>
-                            <p className="text-sm text-slate-600 leading-relaxed italic">{aiDay}</p>
-                          </div>
-                        ) : aiLoading ? (
-                          <div className="flex items-center gap-2 text-xs text-slate-400"><Spinner size={3} />Generating…</div>
-                        ) : null}
                       </div>
                     </div>
                   );
@@ -1494,6 +1639,8 @@ export function PlanView({ onBack, isDark }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [userWaterSpots, setUserWaterSpots] = useState([]);
   const [addWaterMode, setAddWaterMode] = useState(false);
+  const handleRemoveWaterSpot = (lng, lat) =>
+    setUserWaterSpots(prev => prev.filter(s => !(s.lng === lng && s.lat === lat)));
   const [campPositions, setCampPositions] = useState({});
   const fileInputRef = useRef(null);
 
@@ -1699,6 +1846,7 @@ export function PlanView({ onBack, isDark }) {
           rawMiles={rawMiles}
           userWaterSpots={userWaterSpots}
           onAddWaterSpot={(spot) => setUserWaterSpots(prev => [...prev, spot])}
+          onRemoveWaterSpot={handleRemoveWaterSpot}
           addWaterMode={addWaterMode}
           setAddWaterMode={setAddWaterMode}
           campPositions={campPositions}

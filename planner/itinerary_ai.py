@@ -1,7 +1,12 @@
-"""AI itinerary/report generator using Ollama (OpenAI-compatible endpoint)."""
+"""AI situation brief generator using Ollama (OpenAI-compatible endpoint).
+
+Single focused purpose: synthesize all check results (weather, snow, fire, AQI, water)
+into structured, actionable output — no terrain narration, no generic hiking prose.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -12,27 +17,25 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://chinky.gerardconsue
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
 
 
-def _clean(text: str) -> str:
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    return text.strip()
+def _strip_think(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
 def _weather_lines(forecast: list, num_days: int) -> str:
     if not forecast:
-        return "  No forecast available"
-    lines = []
-    for i, p in enumerate(forecast[:num_days]):
-        lines.append(f"  Day {i+1}: {p.get('short', '')} · {p.get('temp', '')} {p.get('temp_unit', '')} · {p.get('wind', '')}")
-    return "\n".join(lines)
+        return "No forecast available"
+    return "; ".join(
+        f"Day {i+1}: {p.get('short','')} {p.get('temp','')}°{p.get('temp_unit','')} {p.get('wind','')}"
+        for i, p in enumerate(forecast[:num_days])
+    )
 
 
-def build_report_prompt(
+def _build_prompt(
     trail_name: str,
     area: str,
     total_miles: float,
     trip_type: str,
     num_days: int,
-    days: list[dict],
     checks: dict,
 ) -> str:
     forecast = checks.get("weather", {}).get("forecast", [])
@@ -40,36 +43,33 @@ def build_report_prompt(
 
     snow = checks.get("snow", {})
     snow_depth = snow.get("max_depth_in")
-    snow_line = f"{snow_depth} in at highest point" if snow_depth else "No snow detected"
+    snow_line = f"{snow_depth} in at highest point" if snow_depth else "None detected"
 
     fire_feats = checks.get("fire", {}).get("perimeters", {}).get("features", [])
-    nearby_fires = [
+    nearby = [
         f for f in fire_feats
         if (f.get("properties", {}).get("distance_from_midpoint_mi") or 999) <= 5
         and (f.get("properties", {}).get("days_since_update") or 999) <= 365
     ]
-    fire_line = f"{len(nearby_fires)} fire perimeter(s) within 5 mi (past year)" if nearby_fires else "No recent fires within 5 mi"
-
-    aqi_obs = checks.get("aqi", {}).get("observations", [])
-    aqi_line = f"{aqi_obs[0]['aqi']} ({aqi_obs[0].get('category', '')})" if aqi_obs else "Unknown"
-
-    water = checks.get("water", {})
-    water_line = water.get("message", "No data")
-
-    day_lines = "\n".join(
-        f"  Day {d['day']}: Mile {d['startMile']} → {d['endMile']} ({d['miles']} mi)"
-        for d in days
+    fire_line = (
+        f"{len(nearby)} fire perimeter(s) within 5 mi (updated past year)"
+        if nearby
+        else "None within 5 mi in the past year"
     )
 
-    return f"""You are writing a concise pre-trip report for a backpacking trip. Output ONLY the sections below, using exactly these headers. No preamble, no extra explanation.
+    aqi_obs = checks.get("aqi", {}).get("observations", [])
+    aqi_line = (
+        f"{aqi_obs[0]['aqi']} — {aqi_obs[0].get('category', '')}"
+        if aqi_obs
+        else "Unavailable"
+    )
 
-Trail: {trail_name}
-Area: {area}
-Distance: {total_miles:.1f} mi ({trip_type})
-Duration: {num_days} day{'s' if num_days != 1 else ''}
+    water_line = checks.get("water", {}).get("message", "No data")
 
-Daily segments:
-{day_lines}
+    return f"""You are a backcountry trip safety analyst. Output ONLY valid JSON — no prose, no markdown, no code fences.
+
+Trip: {trail_name}, {area}
+Distance: {total_miles:.1f} mi ({trip_type}) · {num_days} day{'s' if num_days != 1 else ''}
 
 Current conditions:
   Weather: {weather_block}
@@ -78,38 +78,26 @@ Current conditions:
   AQI: {aqi_line}
   Water: {water_line}
 
-Write the report using EXACTLY these section headers (keep the ALL CAPS labels):
+Output this exact JSON structure:
+{{
+  "situation_brief": "2-3 sentences synthesizing ALL conditions into a clear go/caution/no-go assessment. Cite specific numbers. Focus entirely on what this hiker needs to know before leaving the trailhead.",
+  "gear_adds": ["3-6 specific items directly justified by the conditions above, e.g. \\"gaiters — {snow_depth or 0} in of snow at summit\\""],
+  "timing_notes": ["2-4 practical notes about weather windows, early starts, hazard timing, or schedule adjustments based on the forecast"]
+}}
 
-OVERVIEW:
-[2-3 sentences: overall trip character, terrain type, what makes it special or challenging. Do not repeat the raw numbers.]
-
-CONDITIONS:
-[1-2 sentences: translate the weather/fire/snow/AQI into practical advice for the hiker.]
-
-{chr(10).join(f'DAY {d["day"]}:' + chr(10) + '[1-2 sentences: terrain and highlights for this segment. Mention water sourcing if relevant for this day.]' for d in days)}
-
-Keep each section tight. No bullet points. No markdown. Plain prose only."""
+Rules: cite actual numbers from the conditions. No generic hiking advice. No terrain descriptions. Only valid JSON, nothing else."""
 
 
-def _parse_report(text: str, num_days: int) -> dict:
-    """Split the raw AI output into labelled sections."""
-    sections: dict = {"overview": "", "conditions": "", "days": []}
-    text = _clean(text)
-
-    def extract(label: str, src: str) -> tuple[str, str]:
-        pattern = re.compile(rf"{re.escape(label)}\s*:?\s*(.*?)(?=\n[A-Z][A-Z ]+:|$)", re.DOTALL | re.IGNORECASE)
-        m = pattern.search(src)
-        if m:
-            return m.group(1).strip(), src[:m.start()] + src[m.end():]
-        return "", src
-
-    sections["overview"], text = extract("OVERVIEW", text)
-    sections["conditions"], text = extract("CONDITIONS", text)
-    for i in range(1, num_days + 1):
-        note, text = extract(f"DAY {i}", text)
-        sections["days"].append(note)
-
-    return sections
+def _parse_json(raw: str) -> dict | None:
+    raw = _strip_think(raw)
+    # Try to extract JSON object even if the model added surrounding text
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
 
 
 def generate_report(
@@ -127,68 +115,24 @@ def generate_report(
     except ImportError:
         return {"error": "openai package not installed", "sections": None}
 
-    prompt = build_report_prompt(trail_name, area, total_miles, trip_type, num_days, days, checks)
-    logger.info(f"Generating AI report for {trail_name} ({num_days}d)")
+    prompt = _build_prompt(trail_name, area, total_miles, trip_type, num_days, checks)
+    logger.info(f"Generating situation brief for {trail_name} ({num_days}d)")
 
     try:
         client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama", timeout=timeout)
         response = client.chat.completions.create(
             model=OLLAMA_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.6,
-            max_tokens=1000,
+            temperature=0.3,
+            max_tokens=600,
         )
         raw = response.choices[0].message.content
-        sections = _parse_report(raw, num_days)
-        return {"sections": sections, "model": OLLAMA_MODEL}
+        parsed = _parse_json(raw)
+        if parsed:
+            return {"sections": parsed, "model": OLLAMA_MODEL}
+        # If JSON parse failed, return raw for debugging
+        logger.warning(f"Could not parse JSON from AI response: {raw[:200]}")
+        return {"error": "AI response was not valid JSON", "raw": raw[:500], "sections": None}
     except Exception as exc:
         logger.warning(f"Report AI call failed: {exc}")
         return {"error": str(exc), "sections": None}
-
-
-# Keep original itinerary function for the Itinerary step (pre-checks, no conditions data)
-def generate_itinerary(
-    trail_name: str,
-    area: str,
-    total_miles: float,
-    trip_type: str,
-    num_days: int,
-    days: list[dict],
-    checks: dict,
-    timeout: int = 60,
-) -> dict:
-    try:
-        from openai import OpenAI
-    except ImportError:
-        return {"error": "openai package not installed", "text": None}
-
-    forecast = checks.get("weather", {}).get("forecast", [])
-    weather_block = _weather_lines(forecast, num_days) if forecast else "  No forecast data at this stage"
-    day_lines = "\n".join(f"  Day {d['day']}: Mile {d['startMile']} → {d['endMile']} ({d['miles']} mi)" for d in days)
-
-    prompt = f"""You are a practical wilderness trip planner. Write a brief day-by-day trail itinerary.
-
-Trail: {trail_name} · {area}
-Distance: {total_miles:.1f} mi ({trip_type}) over {num_days} day{'s' if num_days != 1 else ''}
-
-Segments:
-{day_lines}
-
-Weather context:
-{weather_block}
-
-One short paragraph per day (2-3 sentences). Focus on terrain, highlights, camp spots, and water. No headers. Plain text only."""
-
-    try:
-        client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama", timeout=timeout)
-        response = client.chat.completions.create(
-            model=OLLAMA_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=800,
-        )
-        text = _clean(response.choices[0].message.content)
-        return {"text": text, "model": OLLAMA_MODEL}
-    except Exception as exc:
-        logger.warning(f"Itinerary AI call failed: {exc}")
-        return {"error": str(exc), "text": None}
