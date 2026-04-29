@@ -236,3 +236,46 @@ async def proxy_snow_tile(bbox: str, width: int = 256, height: int = 256):
         )
     except Exception:
         return Response(content=b"", media_type="image/png", status_code=204)
+
+
+# ── Cell coverage tile proxy ──────────────────────────────────────────────────
+#
+# Carrier tile URLs — fill these in by opening the carrier's coverage map in
+# your browser DevTools (Network tab, filter by "tile" or ".png") and copying
+# the tile URL pattern. Replace {z}/{x}/{y} placeholders as appropriate.
+#
+# T-Mobile example pattern (inspect coverage.t-mobile.com to get exact URL):
+#   https://howmobileworks.com/coverage/tile/{z}/{x}/{y}.png
+#
+# AT&T example pattern (inspect att.com/maps/wireless-coverage-map.html):
+#   https://oms.att.com/wcs/maps/api/coverage/{z}/{x}/{y}.png
+#
+# Verizon example pattern (inspect verizon.com/coverage-map/):
+#   https://api.verizon.com/coverage/map/tile/{z}/{x}/{y}.png
+
+COVERAGE_TILE_URLS: dict[str, str] = {
+    # Swap these for the real tile URL patterns once you capture them from DevTools.
+    # The placeholder returns empty so the layer silently shows nothing until configured.
+    "tmobile":  "",   # e.g. "https://cdn.coverage.t-mobile.com/{z}/{x}/{y}.png"
+    "att":      "",   # e.g. "https://oms.att.com/wcs/maps/coverage/{z}/{x}/{y}.png"
+    "verizon":  "",   # e.g. "https://api.verizon.com/coverage-map/tile/{z}/{x}/{y}.png"
+}
+
+@router.get("/api/proxy/coverage/{provider}/{z}/{x}/{y}")
+async def proxy_coverage_tile(provider: str, z: int, x: int, y: int):
+    """Proxy carrier cell-coverage raster tiles to avoid CORS.
+    Returns 204 (empty) if the provider URL is not yet configured."""
+    url_template = COVERAGE_TILE_URLS.get(provider, "")
+    if not url_template:
+        return Response(content=b"", media_type="image/png", status_code=204)
+    url = url_template.format(z=z, x=x, y=y)
+    try:
+        r = _requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 BackcountryPlanner/1.0"})
+        r.raise_for_status()
+        return Response(
+            content=r.content,
+            media_type=r.headers.get("content-type", "image/png"),
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    except Exception:
+        return Response(content=b"", media_type="image/png", status_code=204)

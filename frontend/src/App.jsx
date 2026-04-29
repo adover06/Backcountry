@@ -328,6 +328,7 @@ function ReportMap2D({ routeFeature, firePerimeters, snowGeojson, waterGeojson, 
   const [layerVis, setLayerVis] = useState({ fire: true, snow: true, water: true, camps: true, userWater: true });
   const [capturing, setCapturing] = useState(false);
   const [scaleInfo, setScaleInfo] = useState(null);
+  const [coverageProvider, setCoverageProvider] = useState(null);
 
   // Refs so marker effect doesn't stale-close over props
   const campPositionsRef = useRef(campPositions);
@@ -421,6 +422,24 @@ function ReportMap2D({ routeFeature, firePerimeters, snowGeojson, waterGeojson, 
     };
   }, []);
 
+  // Coverage layer for ReportMap2D
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      if (map.getLayer("coverage-layer")) map.removeLayer("coverage-layer");
+      if (map.getSource("coverage-tiles")) map.removeSource("coverage-tiles");
+      if (!coverageProvider) return;
+      map.addSource("coverage-tiles", {
+        type: "raster",
+        tiles: [`/api/proxy/coverage/${coverageProvider}/{z}/{x}/{y}`],
+        tileSize: 256,
+      });
+      map.addLayer({ id: "coverage-layer", type: "raster", source: "coverage-tiles", paint: { "raster-opacity": 0.55 } });
+    };
+    if (map.isStyleLoaded()) apply(); else map.once("load", apply);
+  }, [coverageProvider]);
+
   const toggleLayer = (ids, visible) => {
     const map = mapRef.current;
     if (!map) return;
@@ -454,7 +473,7 @@ function ReportMap2D({ routeFeature, firePerimeters, snowGeojson, waterGeojson, 
   return (
     <div className="rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
       {/* Layer toggles */}
-      <div className="flex items-center gap-4 px-4 py-2.5 bg-white border-b border-slate-100 flex-wrap">
+      <div className="flex items-center gap-3 px-4 py-2.5 bg-white border-b border-slate-100 flex-wrap">
         <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Layers</span>
         {LAYER_DEFS.map(({ key, ids, label, color, markers }) => (
           <label key={key} className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -466,6 +485,22 @@ function ReportMap2D({ routeFeature, firePerimeters, snowGeojson, waterGeojson, 
             <span className="text-xs font-semibold" style={{ color }}>{label}</span>
           </label>
         ))}
+        <div className="flex items-center gap-1 ml-1 pl-2 border-l border-slate-100">
+          <span className="text-[10px] font-semibold text-slate-400 mr-0.5">Cell</span>
+          {["tmobile", "att", "verizon"].map(p => (
+            <button key={p}
+              onClick={() => setCoverageProvider(prev => prev === p ? null : p)}
+              className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold transition-colors ${
+                coverageProvider === p
+                  ? p === "tmobile" ? "bg-pink-600 text-white"
+                    : p === "att"     ? "bg-blue-600 text-white"
+                    : "bg-red-600 text-white"
+                  : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+              }`}>
+              {p === "tmobile" ? "T‑Mo" : p === "att" ? "AT&T" : "Vz"}
+            </button>
+          ))}
+        </div>
         <button onClick={handleExportPng} disabled={capturing}
           className="ml-auto rounded-full bg-slate-800 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-700 transition disabled:opacity-50">
           {capturing ? "Capturing…" : "↓ PNG"}
@@ -957,6 +992,7 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
   const [showHelp, setShowHelp] = useState(false);
   const [scaleInfo, setScaleInfo] = useState(null);
   const [hoveredMile, setHoveredMile] = useState(null);
+  const [coverageProvider, setCoverageProvider] = useState(null); // null = off
 
   // Ref so remove-button closures inside marker DOM don't go stale
   const onRemoveWaterSpotRef = useRef(onRemoveWaterSpot);
@@ -1225,6 +1261,30 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
     map.getCanvas().style.cursor = addWaterMode ? "crosshair" : "";
   }, [addWaterMode]);
 
+  // Cell coverage overlay — adds/removes/swaps a raster layer when provider changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      if (map.getLayer("coverage-layer")) map.removeLayer("coverage-layer");
+      if (map.getSource("coverage-tiles")) map.removeSource("coverage-tiles");
+      if (!coverageProvider) return;
+      map.addSource("coverage-tiles", {
+        type: "raster",
+        tiles: [`/api/proxy/coverage/${coverageProvider}/{z}/{x}/{y}`],
+        tileSize: 256,
+        attribution: `${coverageProvider} coverage`,
+      });
+      map.addLayer({
+        id: "coverage-layer",
+        type: "raster",
+        source: "coverage-tiles",
+        paint: { "raster-opacity": 0.55 },
+      });
+    };
+    if (map.isStyleLoaded()) apply(); else map.once("load", apply);
+  }, [coverageProvider]);
+
   // Elevation profile hover dot — moves a green circle along the route
   useEffect(() => {
     const map = mapRef.current;
@@ -1442,6 +1502,30 @@ function MapCanvas({ routeFeature, firePerimeters, snowGeojson, waterGeojson, fa
           </span>
         </div>
       )}
+
+      {/* ── Cell coverage toggle (bottom-right, above water button) ── */}
+      <div className="pointer-events-auto absolute bottom-[4.5rem] right-3 flex flex-col items-end gap-1 z-10">
+        <div className="flex items-center gap-1.5 rounded-full bg-white/95 border border-slate-200 shadow px-3 py-1.5">
+          <span className="text-[11px] font-semibold text-slate-600">Coverage</span>
+          {["tmobile", "att", "verizon"].map(p => (
+            <button key={p}
+              onClick={() => setCoverageProvider(prev => prev === p ? null : p)}
+              className={`rounded-full px-2 py-0.5 text-[10px] font-bold transition-colors ${
+                coverageProvider === p
+                  ? p === "tmobile" ? "bg-pink-600 text-white"
+                    : p === "att"     ? "bg-blue-600 text-white"
+                    : "bg-red-600 text-white"
+                  : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+              }`}>
+              {p === "tmobile" ? "T‑Mo" : p === "att" ? "AT&T" : "Vz"}
+            </button>
+          ))}
+          {coverageProvider && (
+            <button onClick={() => setCoverageProvider(null)}
+              className="text-[10px] text-slate-400 hover:text-slate-600 font-bold ml-0.5">✕</button>
+          )}
+        </div>
+      </div>
 
       {/* ── Add water source button (plan mode only) ── */}
       {!exploreMode && onAddWaterSpot && (
@@ -1921,8 +2005,33 @@ function FinalReportStep({ planResult, selectedTrail, startDate, itineraryDays, 
             snowGeojson={snowGeojson}
             waterGeojson={waterGeojson}
             fallbackCenter={fallbackCenter}
+            campPositions={campPositions}
+            itineraryDays={itineraryDays}
+            userWaterSpots={userWaterSpots}
           />
-          <p className="text-[10px] text-slate-400 mt-2">Toggle layers above · Export PNG for offline use · Use Print to save as PDF</p>
+          {/* Export strip */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Export</span>
+            {[
+              { label: "GPX", fn: () => downloadFile(buildGpx(routePoints, campPositions, itineraryDays, userWaterSpots, selectedTrail?.name || "route"), "trail.gpx", "application/gpx+xml") },
+              { label: "KML", fn: () => downloadFile(buildKml(routePoints, campPositions, itineraryDays, userWaterSpots, selectedTrail?.name || "route"), "trail.kml", "application/vnd.google-earth.kml+xml") },
+              { label: "GeoJSON", fn: () => downloadFile(buildGeoJson(routePoints, campPositions, itineraryDays, userWaterSpots, selectedTrail?.name || "route"), "trail.geojson", "application/geo+json") },
+            ].map(({ label, fn }) => (
+              <button key={label} onClick={fn}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:border-emerald-400 hover:text-emerald-700 transition">
+                ↓ {label}
+              </button>
+            ))}
+            <button
+              onClick={() => {
+                downloadFile(buildKml(routePoints, campPositions, itineraryDays, userWaterSpots, selectedTrail?.name || "route"), "trail.kml", "application/vnd.google-earth.kml+xml");
+                setTimeout(() => window.open("https://caltopo.com/map.html", "_blank"), 400);
+              }}
+              className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-100 transition">
+              ↗ Open in CalTopo
+            </button>
+            <span className="text-[10px] text-slate-400 ml-1">CalTopo: Add → Import File → select the KML</span>
+          </div>
         </section>
 
         {/* ── Pack list ── */}
@@ -2461,7 +2570,7 @@ export function PlanView({ onBack, isDark }) {
 
   return (
     <div className={`min-h-screen ${isDark ? "bg-black text-slate-100" : "bg-[#f6f3ee] text-slate-900"}`}>
-      <header className={`sticky top-0 z-30 border-b backdrop-blur ${isDark ? "border-neutral-800 bg-black/95" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
+      <header className={`no-print sticky top-0 z-30 border-b backdrop-blur ${isDark ? "border-neutral-800 bg-black/95" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-4 sm:px-8 lg:px-12">
           <div className="flex items-center justify-between gap-6">
             <div className="flex items-center gap-5">
