@@ -11,8 +11,14 @@ from typing import Optional
 
 import requests as _requests
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from planner.auth.deps import get_current_user_optional
+from planner.db import get_session
+from planner.models import TripPlan, User
+from planner.storage import write_gpx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -118,6 +124,9 @@ async def plan_trip(
     end_date: str = Form(...),
     name_hint: Optional[str] = Form(None),
     selected_trail_id: Optional[str] = Form(None),
+    save: Optional[str] = Form(None),
+    user: Optional[User] = Depends(get_current_user_optional),
+    session: AsyncSession = Depends(get_session),
 ):
     if not file.filename.lower().endswith(".gpx"):
         raise HTTPException(status_code=400, detail="Only GPX uploads are supported for now.")
@@ -168,7 +177,7 @@ async def plan_trip(
     report = build_ai_report(route, selected, checks, risk)
     map_layers = build_map_layers(route, fire)
 
-    return {
+    response = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "route": route,
         "trail_match": match_result,
@@ -178,6 +187,39 @@ async def plan_trip(
         "report": report,
         "map_layers": map_layers,
     }
+
+    # Auto-save when authenticated and the client opted in via `save=true`.
+    if user and (save or "").lower() in ("1", "true", "yes"):
+        try:
+            from datetime import date as _date
+            sd = _date.fromisoformat(start_date) if start_date else None
+            ed = _date.fromisoformat(end_date) if end_date else None
+        except ValueError:
+            sd = ed = None
+        trip_name = (selected or {}).get("name") if selected else None
+        trip_name = trip_name or (file.filename or "Untitled trip").rsplit(".", 1)[0]
+        trip = TripPlan(
+            user_id=user.id,
+            name=trip_name[:255],
+            start_date=sd,
+            end_date=ed,
+            route=route,
+            selected_trail=selected,
+            checks=checks,
+            report=report,
+        )
+        session.add(trip)
+        await session.commit()
+        await session.refresh(trip)
+        try:
+            rel = write_gpx(user.id, trip.id, data)
+            trip.gpx_path = rel
+            await session.commit()
+        except Exception as exc:
+            logger.warning(f"GPX persist failed for trip {trip.id}: {exc}")
+        response["saved_trip_id"] = str(trip.id)
+
+    return response
 
 
 @router.post("/api/checks/water")
