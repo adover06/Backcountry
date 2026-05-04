@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import mapboxgl from "mapbox-gl";
 import "./index.css";
+import AccountMenu from "./components/AccountMenu.jsx";
+import SaveTripButton from "./components/SaveTripButton.jsx";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -2637,7 +2639,16 @@ export function PlanView({ onBack, isDark }) {
           onAiReport={setAiReport}
           onContinueToReport={() => goTo("finalreport")}
         />
-        ) : (
+        ) : null}
+        {(isReportStep || isFinalReportStep) && planResult && (
+          <SaveTripButton
+            planResult={planResult}
+            selectedTrail={selectedTrail}
+            startDate={startDate}
+            endDate={endDate}
+          />
+        )}
+        {!isReportStep && !isFinalReportStep && (
           <div className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-12 space-y-10">
             {activeStep === "upload" && (
               <UploadStep
@@ -2758,6 +2769,7 @@ export default function App() {
   return (
     <>
       {modeView}
+      <AccountMenu />
       <button
         onClick={toggleTheme}
         className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold shadow-2xl transition ${isDark ? "bg-emerald-400 text-slate-900 shadow-emerald-500/40" : "bg-white/90 text-slate-900 shadow-lg"}`}
