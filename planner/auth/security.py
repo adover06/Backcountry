@@ -6,9 +6,9 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
+import bcrypt
 from dotenv import load_dotenv
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 load_dotenv()
 
@@ -17,19 +17,23 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TTL_MIN = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "15"))
 REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "30"))
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 TokenType = Literal["access", "refresh"]
 
 
+def _to_bytes(plain: str) -> bytes:
+    # bcrypt rejects passwords longer than 72 bytes; truncate to keep behavior
+    # consistent and avoid surprising 500s on very long inputs.
+    return plain.encode("utf-8")[:72]
+
+
 def hash_password(plain: str) -> str:
-    return _pwd.hash(plain)
+    return bcrypt.hashpw(_to_bytes(plain), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return _pwd.verify(plain, hashed)
-    except Exception:
+        return bcrypt.checkpw(_to_bytes(plain), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
         return False
 
 

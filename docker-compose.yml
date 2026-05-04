@@ -38,8 +38,13 @@ services:
       WEATHER_CACHE_TTL_SECONDS: ${WEATHER_CACHE_TTL_SECONDS:-1800}
       AQI_CACHE_TTL_SECONDS: ${AQI_CACHE_TTL_SECONDS:-1800}
       FIRE_HISTORY_DAYS: ${FIRE_HISTORY_DAYS:-365}
+      # Path inside the container to the trail GeoJSON.
+      TRAILS_SOURCE: ${TRAILS_SOURCE:-/data/trails.geojson}
     volumes:
       - gpxdata:/var/lib/backcountry/gpx
+      # Mount your trail GeoJSON here. Set TRAILS_FILE in .env to its host path,
+      # or place the file at ./data/trails.geojson next to docker-compose.yml.
+      - ${TRAILS_FILE:-./data/trails.geojson}:/data/trails.geojson:ro
 
   frontend:
     build:
