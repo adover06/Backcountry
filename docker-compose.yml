@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-backcountry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-backcountry}
+      POSTGRES_DB: ${POSTGRES_DB:-backcountry}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-backcountry}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-backcountry}:${POSTGRES_PASSWORD:-backcountry}@postgres:5432/${POSTGRES_DB:-backcountry}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-15}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
+      STORAGE_ROOT: /var/lib/backcountry/gpx
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      AIRNOW_API_KEY: ${AIRNOW_API_KEY:-}
+      FIRE_CACHE_TTL_SECONDS: ${FIRE_CACHE_TTL_SECONDS:-21600}
+      SNOW_CACHE_TTL_SECONDS: ${SNOW_CACHE_TTL_SECONDS:-3600}
+      WEATHER_CACHE_TTL_SECONDS: ${WEATHER_CACHE_TTL_SECONDS:-1800}
+      AQI_CACHE_TTL_SECONDS: ${AQI_CACHE_TTL_SECONDS:-1800}
+      FIRE_HISTORY_DAYS: ${FIRE_HISTORY_DAYS:-365}
+    volumes:
+      - gpxdata:/var/lib/backcountry/gpx
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
+        VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  gpxdata:
+  caddy_data:
+  caddy_config:

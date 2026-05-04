@@ -1,0 +1,15 @@
+# Caddy reverse proxy with automatic TLS.
+# Replace yourdomain.com with your actual domain. For local testing use :80.
+{$DOMAIN:localhost} {
+    encode zstd gzip
+
+    # API → backend
+    handle /api/* {
+        reverse_proxy backend:6767
+    }
+
+    # Everything else → frontend (SPA)
+    handle {
+        reverse_proxy frontend:80
+    }
+}
