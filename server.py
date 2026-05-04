@@ -1,12 +1,47 @@
 """FastAPI server wrapper for the trip planner API."""
 
-import uvicorn
-from fastapi import FastAPI
+from __future__ import annotations
 
+import os
+
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+load_dotenv()
+
+from planner.auth.routes import router as auth_router
+from planner.rate_limit import limiter
+from planner.trips.routes import router as trips_router
 from planner_api import router as planner_router
 
-app = FastAPI()
+app = FastAPI(title="Backcountry API")
+
+# CORS — frontend origin. In dev: http://localhost:5173.
+_origins = [o.strip() for o in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Rate limiting (used via @limiter.limit on routes that opt in).
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+app.include_router(auth_router)
+app.include_router(trips_router)
 app.include_router(planner_router)
+
+
+@app.get("/api/health")
+async def health():
+    return {"ok": True}
 
 
 if __name__ == "__main__":
