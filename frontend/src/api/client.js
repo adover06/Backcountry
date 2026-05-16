@@ -1,49 +1,33 @@
-// Centralized API client. All requests include cookies; on 401 we attempt a single
-// refresh round-trip before propagating the error.
+// Centralized API client. Every request gets a fresh Firebase ID token attached
+// as a Bearer header when the user is signed in. Firebase auto-refreshes tokens,
+// so no manual refresh loop is needed.
+
+import { auth } from "../auth/firebase";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-let refreshing = null;
-
-async function attemptRefresh() {
-  if (!refreshing) {
-    refreshing = fetch(`${API_BASE}/api/auth/refresh`, {
-      method: "POST",
-      credentials: "include",
-    })
-      .then((r) => r.ok)
-      .catch(() => false)
-      .finally(() => {
-        // allow another attempt on the next failure
-        setTimeout(() => (refreshing = null), 0);
-      });
+async function authHeader(extraHeaders = {}) {
+  const headers = { ...extraHeaders };
+  const user = auth.currentUser;
+  if (user) {
+    const token = await user.getIdToken();
+    headers["Authorization"] = `Bearer ${token}`;
   }
-  return refreshing;
+  return headers;
 }
 
 async function request(path, { method = "GET", body, headers, isForm } = {}) {
-  const opts = {
-    method,
-    credentials: "include",
-    headers: { ...(headers || {}) },
-  };
+  const baseHeaders = await authHeader(headers);
+  const opts = { method, headers: baseHeaders };
   if (body !== undefined) {
     if (isForm) {
-      opts.body = body; // FormData
+      opts.body = body;
     } else {
       opts.body = JSON.stringify(body);
       opts.headers["Content-Type"] = "application/json";
     }
   }
-
-  let res = await fetch(`${API_BASE}${path}`, opts);
-  if (res.status === 401 && path !== "/api/auth/refresh" && path !== "/api/auth/login") {
-    const ok = await attemptRefresh();
-    if (ok) {
-      res = await fetch(`${API_BASE}${path}`, opts);
-    }
-  }
-  return res;
+  return fetch(`${API_BASE}${path}`, opts);
 }
 
 async function parse(res) {
