@@ -1,4 +1,4 @@
-"""ORM models: User, TripPlan, SavedTrail, ShareToken."""
+"""ORM models: User (keyed by Firebase UID), TripPlan, SavedTrail, ShareToken, InviteCode."""
 
 from __future__ import annotations
 
@@ -23,11 +23,9 @@ from planner.db import Base
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    # Firebase UID — assigned by Firebase Auth, not generated here.
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(120))
     preferences: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -42,14 +40,31 @@ class User(Base):
     )
 
 
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    created_by: Mapped[Optional[str]] = mapped_column(
+        String(128), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    redeemed_by: Mapped[Optional[str]] = mapped_column(
+        String(128), ForeignKey("users.id", ondelete="SET NULL"), unique=True
+    )
+    redeemed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class TripPlan(Base):
     __tablename__ = "trip_plans"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     start_date: Mapped[Optional[date]] = mapped_column(Date)
@@ -75,8 +90,8 @@ class TripPlan(Base):
 class SavedTrail(Base):
     __tablename__ = "saved_trails"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    user_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     trail_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     saved_at: Mapped[datetime] = mapped_column(

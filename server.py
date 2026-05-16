@@ -13,6 +13,7 @@ from slowapi.errors import RateLimitExceeded
 
 load_dotenv()
 
+from planner.admin.routes import router as admin_router
 from planner.auth.routes import router as auth_router
 from planner.rate_limit import limiter
 from planner.trips.routes import router as trips_router
@@ -35,6 +36,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(trips_router)
 app.include_router(planner_router)
 

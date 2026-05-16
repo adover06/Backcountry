@@ -1,55 +1,40 @@
-"""Auth routes: register, login, logout, refresh, me, profile update."""
+"""Auth routes — Firebase token in, app User out. Single-use invite code on first signup."""
 
 from __future__ import annotations
 
-import uuid
+import os
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, EmailStr, Field
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from planner.auth.cookies import (
-    ACCESS_COOKIE,
-    REFRESH_COOKIE,
-    clear_auth_cookies,
-    set_auth_cookies,
-)
-from planner.auth.deps import get_current_user
-from planner.auth.security import (
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-    hash_password,
-    verify_password,
+from planner.auth.deps import (
+    get_admin_user,
+    get_current_user,
+    get_firebase_claims,
 )
 from planner.db import get_session
-from planner.models import User
-from planner.rate_limit import limiter
+from planner.models import InviteCode, User
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-class RegisterIn(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
-    display_name: Optional[str] = Field(default=None, max_length=120)
-
-
-class LoginIn(BaseModel):
-    email: EmailStr
-    password: str
-
-
 class UserOut(BaseModel):
-    id: uuid.UUID
-    email: EmailStr
+    id: str
+    email: str
     display_name: Optional[str] = None
     preferences: dict = {}
+    is_admin: bool = False
 
     class Config:
         from_attributes = True
+
+
+class SignupIn(BaseModel):
+    invite_code: str = Field(min_length=4, max_length=64)
 
 
 class ProfileUpdateIn(BaseModel):
@@ -57,84 +42,27 @@ class ProfileUpdateIn(BaseModel):
     preferences: Optional[dict] = None
 
 
-def _issue_session(response: Response, user: User) -> None:
-    set_auth_cookies(
-        response,
-        access=create_access_token(str(user.id)),
-        refresh=create_refresh_token(str(user.id)),
+def _admin_emails() -> set[str]:
+    return {
+        e.strip().lower()
+        for e in os.getenv("ADMIN_EMAILS", "").split(",")
+        if e.strip()
+    }
+
+
+def _to_out(user: User) -> UserOut:
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        preferences=user.preferences or {},
+        is_admin=(user.email or "").lower() in _admin_emails(),
     )
-
-
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-@limiter.limit("5/minute")
-async def register(
-    request: Request,
-    payload: RegisterIn,
-    response: Response,
-    session: AsyncSession = Depends(get_session),
-):
-    existing = await session.scalar(select(User).where(User.email == payload.email.lower()))
-    if existing:
-        raise HTTPException(status_code=409, detail="Email already registered")
-    user = User(
-        email=payload.email.lower(),
-        password_hash=hash_password(payload.password),
-        display_name=payload.display_name,
-        preferences={},
-    )
-    session.add(user)
-    await session.commit()
-    await session.refresh(user)
-    _issue_session(response, user)
-    return user
-
-
-@router.post("/login", response_model=UserOut)
-@limiter.limit("10/minute")
-async def login(
-    request: Request,
-    payload: LoginIn,
-    response: Response,
-    session: AsyncSession = Depends(get_session),
-):
-    user = await session.scalar(select(User).where(User.email == payload.email.lower()))
-    if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    _issue_session(response, user)
-    return user
-
-
-@router.post("/logout")
-async def logout(response: Response):
-    clear_auth_cookies(response)
-    return {"ok": True}
-
-
-@router.post("/refresh", response_model=UserOut)
-async def refresh(
-    response: Response,
-    bc_refresh: str | None = Cookie(default=None, alias=REFRESH_COOKIE),
-    session: AsyncSession = Depends(get_session),
-):
-    if not bc_refresh:
-        raise HTTPException(status_code=401, detail="No refresh token")
-    payload = decode_token(bc_refresh, expected_type="refresh")
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
-    try:
-        user_id = uuid.UUID(payload["sub"])
-    except (KeyError, ValueError):
-        raise HTTPException(status_code=401, detail="Malformed token")
-    user = await session.get(User, user_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="User no longer exists")
-    _issue_session(response, user)
-    return user
 
 
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
-    return user
+    return _to_out(user)
 
 
 @router.patch("/me", response_model=UserOut)
@@ -149,4 +77,48 @@ async def update_me(
         user.preferences = {**(user.preferences or {}), **payload.preferences}
     await session.commit()
     await session.refresh(user)
-    return user
+    return _to_out(user)
+
+
+@router.post("/signup", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+async def signup(
+    payload: SignupIn,
+    claims: dict = Depends(get_firebase_claims),
+    session: AsyncSession = Depends(get_session),
+):
+    """First-time signup: requires a valid, unredeemed invite code.
+
+    Existing users hitting this endpoint just get their record back idempotently.
+    """
+    uid = claims["uid"]
+    email = (claims.get("email") or "").lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Firebase user has no email")
+    # Admins can sign up without an invite code.
+    is_admin = email in _admin_emails()
+
+    existing = await session.get(User, uid)
+    if existing:
+        return _to_out(existing)
+
+    code: InviteCode | None = None
+    if not is_admin:
+        code = await session.get(InviteCode, payload.invite_code.strip())
+        if not code:
+            raise HTTPException(status_code=400, detail="Invalid invite code")
+        if code.redeemed_by:
+            raise HTTPException(status_code=400, detail="Invite code already used")
+
+    user = User(
+        id=uid,
+        email=email,
+        display_name=claims.get("name"),
+        preferences={},
+    )
+    session.add(user)
+    if code is not None:
+        code.redeemed_by = uid
+        code.redeemed_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(user)
+    return _to_out(user)

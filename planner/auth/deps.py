@@ -1,49 +1,76 @@
-"""FastAPI dependencies for current-user resolution."""
+"""FastAPI dependencies for Firebase-backed authentication."""
 
 from __future__ import annotations
 
-import uuid
+import os
 
-from fastapi import Cookie, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from planner.auth.cookies import ACCESS_COOKIE
-from planner.auth.security import decode_token
+from planner.auth.firebase import verify_id_token
 from planner.db import get_session
 from planner.models import User
 
 
+def _bearer(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    parts = authorization.split(" ", 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return None
+
+
+async def get_firebase_claims(authorization: str | None = Header(default=None)) -> dict:
+    """Verified Firebase token claims, or 401."""
+    token = _bearer(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    claims = verify_id_token(token)
+    if not claims:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return claims
+
+
+async def get_firebase_claims_optional(
+    authorization: str | None = Header(default=None),
+) -> dict | None:
+    token = _bearer(authorization)
+    if not token:
+        return None
+    return verify_id_token(token)
+
+
 async def get_current_user(
-    bc_access: str | None = Cookie(default=None, alias=ACCESS_COOKIE),
+    claims: dict = Depends(get_firebase_claims),
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    if not bc_access:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    payload = decode_token(bc_access, expected_type="access")
-    if not payload:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
-    try:
-        user_id = uuid.UUID(payload["sub"])
-    except (KeyError, ValueError):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Malformed token")
-    user = await session.get(User, user_id)
+    """Look up the User row. Returns 403 if the Firebase user has no app account yet
+    (they must complete invite-gated signup via POST /api/auth/me first)."""
+    user = await session.get(User, claims["uid"])
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
+        raise HTTPException(
+            status_code=403,
+            detail="No account for this Firebase user. Redeem an invite code first.",
+        )
     return user
 
 
 async def get_current_user_optional(
-    bc_access: str | None = Cookie(default=None, alias=ACCESS_COOKIE),
+    claims: dict | None = Depends(get_firebase_claims_optional),
     session: AsyncSession = Depends(get_session),
 ) -> User | None:
-    if not bc_access:
+    if not claims:
         return None
-    payload = decode_token(bc_access, expected_type="access")
-    if not payload:
-        return None
-    try:
-        user_id = uuid.UUID(payload["sub"])
-    except (KeyError, ValueError):
-        return None
-    return await session.get(User, user_id)
+    return await session.get(User, claims["uid"])
+
+
+def _admin_emails() -> set[str]:
+    raw = os.getenv("ADMIN_EMAILS", "")
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+async def get_admin_user(user: User = Depends(get_current_user)) -> User:
+    if (user.email or "").lower() not in _admin_emails():
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
