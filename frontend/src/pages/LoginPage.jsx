@@ -1,27 +1,44 @@
 import { useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { firebaseUser, appUser, needsInvite, signInGoogle, redeemInvite, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const from = location.state?.from || "/";
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState(null);
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
-  async function onSubmit(e) {
+  // Already fully signed in → bounce.
+  if (appUser) {
+    navigate(from, { replace: true });
+    return null;
+  }
+
+  async function onGoogle() {
+    setError(null);
+    setBusy(true);
+    try {
+      await signInGoogle();
+    } catch (err) {
+      setError(err.message || "Sign-in failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRedeem(e) {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      await login(email, password);
+      await redeemInvite(code);
       navigate(from, { replace: true });
     } catch (err) {
-      setError(err.message || "Login failed");
+      setError(err.message || "Invalid invite code");
     } finally {
       setBusy(false);
     }
@@ -29,48 +46,58 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100 p-6">
-      <form
-        onSubmit={onSubmit}
-        className="w-full max-w-sm space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl"
-      >
-        <h1 className="text-xl font-semibold">Sign in</h1>
-        <label className="block">
-          <span className="text-xs uppercase tracking-wide text-slate-400">Email</span>
-          <input
-            type="email"
-            required
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 w-full rounded-lg bg-slate-800 px-3 py-2 outline-none ring-1 ring-slate-700 focus:ring-teal-500"
-          />
-        </label>
-        <label className="block">
-          <span className="text-xs uppercase tracking-wide text-slate-400">Password</span>
-          <input
-            type="password"
-            required
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full rounded-lg bg-slate-800 px-3 py-2 outline-none ring-1 ring-slate-700 focus:ring-teal-500"
-          />
-        </label>
+      <div className="w-full max-w-sm space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl">
+        <h1 className="text-xl font-semibold">Backcountry</h1>
+
+        {!firebaseUser && !needsInvite && (
+          <>
+            <p className="text-sm text-slate-400">
+              Invite-only beta. Sign in with Google, then enter your invite code.
+            </p>
+            <button
+              onClick={onGoogle}
+              disabled={busy}
+              className="w-full rounded-lg bg-white px-3 py-2 font-medium text-slate-900 hover:bg-slate-100 disabled:opacity-50"
+            >
+              {busy ? "Opening Google…" : "Continue with Google"}
+            </button>
+          </>
+        )}
+
+        {needsInvite && (
+          <form onSubmit={onRedeem} className="space-y-3">
+            <p className="text-sm text-slate-300">
+              Signed in as <span className="text-slate-100">{firebaseUser?.email}</span>.
+              Enter your invite code to finish setup.
+            </p>
+            <input
+              type="text"
+              required
+              autoFocus
+              placeholder="invite code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              className="w-full rounded-lg bg-slate-800 px-3 py-2 outline-none ring-1 ring-slate-700 focus:ring-emerald-500"
+            />
+            <button
+              type="submit"
+              disabled={busy}
+              className="w-full rounded-lg bg-emerald-500 px-3 py-2 font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+            >
+              {busy ? "Checking…" : "Redeem code"}
+            </button>
+            <button
+              type="button"
+              onClick={logout}
+              className="w-full text-xs text-slate-400 hover:text-slate-200"
+            >
+              Cancel and sign out
+            </button>
+          </form>
+        )}
+
         {error && <p className="text-sm text-rose-400">{error}</p>}
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded-lg bg-teal-500 px-3 py-2 font-medium text-slate-950 hover:bg-teal-400 disabled:opacity-50"
-        >
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-        <p className="text-sm text-slate-400">
-          New here?{" "}
-          <Link to="/register" className="text-teal-400 hover:underline">
-            Create an account
-          </Link>
-        </p>
-      </form>
+      </div>
     </div>
   );
 }

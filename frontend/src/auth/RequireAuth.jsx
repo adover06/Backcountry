@@ -1,8 +1,8 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./AuthContext";
 
-export default function RequireAuth({ children }) {
-  const { user, loading } = useAuth();
+export default function RequireAuth({ children, requireAdmin = false }) {
+  const { appUser, needsInvite, loading } = useAuth();
   const location = useLocation();
   if (loading) {
     return (
@@ -11,8 +11,14 @@ export default function RequireAuth({ children }) {
       </div>
     );
   }
-  if (!user) {
+  if (needsInvite) {
     return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+  }
+  if (!appUser) {
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+  }
+  if (requireAdmin && !appUser.is_admin) {
+    return <Navigate to="/" replace />;
   }
   return children;
 }

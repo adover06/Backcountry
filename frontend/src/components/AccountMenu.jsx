@@ -3,32 +3,26 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 export default function AccountMenu() {
-  const { user, loading, logout } = useAuth();
+  const { appUser, loading, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
   if (loading) return null;
 
-  if (!user) {
+  if (!appUser) {
     return (
-      <div className="fixed top-3 right-3 z-50 flex gap-2">
+      <div className="fixed top-3 right-3 z-50">
         <Link
           to="/login"
           className="rounded-full bg-slate-900/80 px-3 py-1 text-xs font-medium text-white shadow-lg backdrop-blur hover:bg-slate-800"
         >
           Sign in
         </Link>
-        <Link
-          to="/register"
-          className="rounded-full bg-emerald-500/90 px-3 py-1 text-xs font-semibold text-slate-950 shadow-lg hover:bg-emerald-400"
-        >
-          Sign up
-        </Link>
       </div>
     );
   }
 
-  const initial = (user.display_name || user.email || "?")[0].toUpperCase();
+  const initial = (appUser.display_name || appUser.email || "?")[0].toUpperCase();
 
   return (
     <div className="fixed top-3 right-3 z-50">
@@ -42,7 +36,7 @@ export default function AccountMenu() {
       {open && (
         <div className="absolute right-0 mt-2 w-48 overflow-hidden rounded-xl border border-slate-700 bg-slate-900 text-sm shadow-2xl">
           <div className="border-b border-slate-800 px-4 py-2 text-xs text-slate-400">
-            {user.email}
+            {appUser.email}
           </div>
           <Link
             to="/trips"
@@ -58,11 +52,20 @@ export default function AccountMenu() {
           >
             Profile
           </Link>
+          {appUser.is_admin && (
+            <Link
+              to="/admin"
+              onClick={() => setOpen(false)}
+              className="block px-4 py-2 text-slate-200 hover:bg-slate-800"
+            >
+              Admin
+            </Link>
+          )}
           <button
             onClick={async () => {
               setOpen(false);
               await logout();
-              navigate("/");
+              navigate("/login");
             }}
             className="block w-full px-4 py-2 text-left text-rose-300 hover:bg-slate-800"
           >

@@ -1,57 +1,89 @@
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+} from "firebase/auth";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api } from "../api/client";
+import { auth, googleProvider } from "./firebase";
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  // appUser is our DB row (with `is_admin` flag); null while signed out or pre-invite.
+  const [appUser, setAppUser] = useState(null);
+  // True when Firebase has a user but our backend returns 403 — they need a code.
+  const [needsInvite, setNeedsInvite] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const refreshMe = useCallback(async () => {
+  const fetchAppUser = useCallback(async () => {
     try {
       const me = await api.get("/api/auth/me");
-      setUser(me);
-    } catch {
-      setUser(null);
+      setAppUser(me);
+      setNeedsInvite(false);
+    } catch (err) {
+      if (err.status === 403) {
+        setAppUser(null);
+        setNeedsInvite(true);
+      } else if (err.status === 401) {
+        setAppUser(null);
+        setNeedsInvite(false);
+      } else {
+        setAppUser(null);
+      }
     }
   }, []);
 
   useEffect(() => {
-    (async () => {
-      await refreshMe();
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setFirebaseUser(u);
+      if (u) {
+        await fetchAppUser();
+      } else {
+        setAppUser(null);
+        setNeedsInvite(false);
+      }
       setLoading(false);
-    })();
-  }, [refreshMe]);
+    });
+    return () => unsub();
+  }, [fetchAppUser]);
 
-  const login = useCallback(async (email, password) => {
-    const me = await api.post("/api/auth/login", { email, password });
-    setUser(me);
-    return me;
+  const signInGoogle = useCallback(async () => {
+    await signInWithPopup(auth, googleProvider);
+    // onAuthStateChanged will fire and populate appUser / needsInvite.
   }, []);
 
-  const register = useCallback(async (email, password, display_name) => {
-    const me = await api.post("/api/auth/register", { email, password, display_name });
-    setUser(me);
+  const redeemInvite = useCallback(async (code) => {
+    const me = await api.post("/api/auth/signup", { invite_code: code.trim() });
+    setAppUser(me);
+    setNeedsInvite(false);
     return me;
   }, []);
 
   const logout = useCallback(async () => {
-    try {
-      await api.post("/api/auth/logout");
-    } finally {
-      setUser(null);
-    }
+    await signOut(auth);
   }, []);
 
   const updateProfile = useCallback(async (patch) => {
     const me = await api.patch("/api/auth/me", patch);
-    setUser(me);
+    setAppUser(me);
     return me;
   }, []);
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, register, logout, refreshMe, updateProfile }}
+      value={{
+        firebaseUser,
+        user: appUser, // alias kept so existing components keep working
+        appUser,
+        needsInvite,
+        loading,
+        signInGoogle,
+        redeemInvite,
+        logout,
+        updateProfile,
+      }}
     >
       {children}
     </AuthContext.Provider>
