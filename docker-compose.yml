@@ -24,14 +24,10 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-backcountry}:${POSTGRES_PASSWORD:-backcountry}@postgres:5432/${POSTGRES_DB:-backcountry}
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-15}
-      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
       STORAGE_ROOT: /var/lib/backcountry/gpx
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost}
-      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       AIRNOW_API_KEY: ${AIRNOW_API_KEY:-}
       FIRE_CACHE_TTL_SECONDS: ${FIRE_CACHE_TTL_SECONDS:-21600}
       SNOW_CACHE_TTL_SECONDS: ${SNOW_CACHE_TTL_SECONDS:-3600}
@@ -45,6 +41,9 @@ services:
       # Mount your trail GeoJSON here. Set TRAILS_FILE in .env to its host path,
       # or place the file at ./data/trails.geojson next to docker-compose.yml.
       - ${TRAILS_FILE:-./data/trails.geojson}:/data/trails.geojson:ro
+      # Firebase service account JSON. Set FIREBASE_SERVICE_ACCOUNT_FILE in .env to
+      # the host path, or place the file at ./data/firebase-service-account.json.
+      - ${FIREBASE_SERVICE_ACCOUNT_FILE:-./data/firebase-service-account.json}:/run/secrets/firebase-service-account.json:ro
 
   frontend:
     build:
@@ -53,6 +52,10 @@ services:
       args:
         VITE_API_BASE: ${VITE_API_BASE:-}
         VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
+        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
+        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
+        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
+        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
     restart: unless-stopped
 
   caddy:
