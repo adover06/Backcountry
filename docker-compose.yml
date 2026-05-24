@@ -25,7 +25,10 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-backcountry}:${POSTGRES_PASSWORD:-backcountry}@postgres:5432/${POSTGRES_DB:-backcountry}
       STORAGE_ROOT: /var/lib/backcountry/gpx
-      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost}
+      # Frontend + API share an origin behind the tunnel, so the only origin we
+      # need to allow is the public Cloudflare URL (for safety, even though same-origin
+      # requests don't trip CORS).
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-https://your.tunnel.hostname}
       FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       AIRNOW_API_KEY: ${AIRNOW_API_KEY:-}
@@ -34,22 +37,20 @@ services:
       WEATHER_CACHE_TTL_SECONDS: ${WEATHER_CACHE_TTL_SECONDS:-1800}
       AQI_CACHE_TTL_SECONDS: ${AQI_CACHE_TTL_SECONDS:-1800}
       FIRE_HISTORY_DAYS: ${FIRE_HISTORY_DAYS:-365}
-      # Path inside the container to the trail GeoJSON.
       TRAILS_SOURCE: ${TRAILS_SOURCE:-/data/trails.geojson}
     volumes:
       - gpxdata:/var/lib/backcountry/gpx
-      # Mount your trail GeoJSON here. Set TRAILS_FILE in .env to its host path,
-      # or place the file at ./data/trails.geojson next to docker-compose.yml.
       - ${TRAILS_FILE:-./data/trails.geojson}:/data/trails.geojson:ro
-      # Firebase service account JSON. Set FIREBASE_SERVICE_ACCOUNT_FILE in .env to
-      # the host path, or place the file at ./data/firebase-service-account.json.
       - ${FIREBASE_SERVICE_ACCOUNT_FILE:-./data/firebase-service-account.json}:/run/secrets/firebase-service-account.json:ro
+    # No host port published — frontend nginx talks to backend over the docker network.
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
+        # Empty VITE_API_BASE means "same origin" — the SPA calls /api/... and
+        # frontend nginx proxies to the backend container. No CORS needed.
         VITE_API_BASE: ${VITE_API_BASE:-}
         VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
         VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
@@ -57,25 +58,13 @@ services:
         VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
         VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
     restart: unless-stopped
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
     depends_on:
       - backend
-      - frontend
     ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:-localhost}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      # Single host port the Cloudflare Tunnel points at. Change PUBLIC_PORT in .env
+      # if 8088 collides with something else on your host.
+      - "${PUBLIC_PORT:-8088}:80"
 
 volumes:
   pgdata:
   gpxdata:
-  caddy_data:
-  caddy_config:
