@@ -17,16 +17,24 @@ def evaluate_risk(checks: dict) -> dict:
             status = "caution"
             reasons.append(f"AQI {aqi} ({obs.get('category')})")
 
-    if checks.get("fire", {}).get("perimeters"):
+    fire = checks.get("fire") or {}
+    perimeters = fire.get("perimeters") or {}
+    if perimeters.get("features"):
         if status == "go":
             status = "caution"
         reasons.append("Active fire perimeters present in region")
 
-    if checks.get("snow", {}).get("depth_in"):
-        depth = checks["snow"]["depth_in"]
-        if depth >= 12 and status != "no-go":
-            status = "caution"
-            reasons.append(f"Snow depth ~{depth} in")
+    # Snow: the snow check returns `max_depth_in` (and `max_snowfall_in`), not
+    # `depth_in`. Read the real field names and guard against None/unavailable.
+    snow = checks.get("snow") or {}
+    snow_depth = snow.get("max_depth_in")
+    snow_fall = snow.get("max_snowfall_in")
+    if isinstance(snow_depth, (int, float)) and snow_depth >= 12 and status != "no-go":
+        status = "caution"
+        reasons.append(f"Snow depth ~{round(snow_depth)} in at highest point")
+    elif isinstance(snow_fall, (int, float)) and snow_fall >= 6 and status != "no-go":
+        status = "caution"
+        reasons.append(f"Forecast snowfall ~{round(snow_fall)} in")
 
     return {
         "status": status,
