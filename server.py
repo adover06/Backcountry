@@ -6,15 +6,19 @@ import os
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 load_dotenv()
 
 from planner.admin.routes import router as admin_router
 from planner.auth.routes import router as auth_router
+from planner.db import get_session
 from planner.rate_limit import limiter
 from planner.trips.routes import router as trips_router
 from planner_api import router as planner_router
@@ -42,8 +46,13 @@ app.include_router(planner_router)
 
 
 @app.get("/api/health")
-async def health():
-    return {"ok": True}
+async def health(session: AsyncSession = Depends(get_session)):
+    """Liveness + DB readiness. Returns 503 if the database is unreachable."""
+    try:
+        await session.execute(text("SELECT 1"))
+    except Exception as exc:  # pragma: no cover - infra failure path
+        return JSONResponse(status_code=503, content={"ok": False, "db": str(exc)})
+    return {"ok": True, "db": "ok"}
 
 
 if __name__ == "__main__":

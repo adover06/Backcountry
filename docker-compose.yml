@@ -43,6 +43,12 @@ services:
       - ${TRAILS_FILE:-./data/trails.geojson}:/data/trails.geojson:ro
       - ${FIREBASE_SERVICE_ACCOUNT_FILE:-./data/firebase-service-account.json}:/run/secrets/firebase-service-account.json:ro
     # No host port published — frontend nginx talks to backend over the docker network.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:6767/api/health').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   frontend:
     build:
@@ -59,11 +65,17 @@ services:
         VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       # Single host port the Cloudflare Tunnel points at. Change PUBLIC_PORT in .env
       # if 8088 collides with something else on your host.
       - "${PUBLIC_PORT:-8088}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 volumes:
   pgdata:
