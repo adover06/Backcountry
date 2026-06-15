@@ -2,15 +2,30 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 
+const METRIC_LABELS = [
+  ["users", "Users"],
+  ["trips", "Saved trips"],
+  ["saved_trails", "Saved trails"],
+  ["invites_available", "Invites available"],
+  ["invites_redeemed", "Invites redeemed"],
+  ["active_share_links", "Active share links"],
+];
+
 export default function AdminPage() {
   const [invites, setInvites] = useState(null);
+  const [metrics, setMetrics] = useState(null);
   const [error, setError] = useState(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
     try {
-      setInvites(await api.get("/api/admin/invites"));
+      const [inv, met] = await Promise.all([
+        api.get("/api/admin/invites"),
+        api.get("/api/admin/metrics").catch(() => null),
+      ]);
+      setInvites(inv);
+      setMetrics(met);
     } catch (e) {
       setError(e.message);
     }
@@ -57,6 +72,27 @@ export default function AdminPage() {
       </header>
 
       <main className="mx-auto max-w-4xl space-y-6 p-6">
+        {metrics && (
+          <section>
+            <h2 className="mb-3 text-xs uppercase tracking-wide text-slate-400">
+              Overview
+            </h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {METRIC_LABELS.map(([key, label]) => (
+                <div
+                  key={key}
+                  className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-3"
+                >
+                  <div className="text-2xl font-semibold text-emerald-400">
+                    {metrics[key] ?? 0}
+                  </div>
+                  <div className="text-xs text-slate-400">{label}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <form onSubmit={mint} className="flex gap-2">
           <input
             type="text"

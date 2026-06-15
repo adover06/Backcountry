@@ -8,14 +8,53 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from planner.auth.deps import get_admin_user
 from planner.db import get_session
-from planner.models import InviteCode, User
+from planner.models import InviteCode, SavedTrail, ShareToken, TripPlan, User
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+class MetricsOut(BaseModel):
+    users: int
+    trips: int
+    saved_trails: int
+    invites_total: int
+    invites_redeemed: int
+    invites_available: int
+    active_share_links: int
+
+
+@router.get("/metrics", response_model=MetricsOut)
+async def metrics(
+    _admin: User = Depends(get_admin_user),
+    session: AsyncSession = Depends(get_session),
+):
+    async def _count(stmt) -> int:
+        return int(await session.scalar(stmt) or 0)
+
+    users = await _count(select(func.count()).select_from(User))
+    trips = await _count(select(func.count()).select_from(TripPlan))
+    saved = await _count(select(func.count()).select_from(SavedTrail))
+    invites_total = await _count(select(func.count()).select_from(InviteCode))
+    invites_redeemed = await _count(
+        select(func.count()).select_from(InviteCode).where(InviteCode.redeemed_by.isnot(None))
+    )
+    active_shares = await _count(
+        select(func.count()).select_from(ShareToken).where(ShareToken.revoked_at.is_(None))
+    )
+    return MetricsOut(
+        users=users,
+        trips=trips,
+        saved_trails=saved,
+        invites_total=invites_total,
+        invites_redeemed=invites_redeemed,
+        invites_available=invites_total - invites_redeemed,
+        active_share_links=active_shares,
+    )
 
 
 class InviteOut(BaseModel):
