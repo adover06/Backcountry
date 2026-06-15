@@ -6,18 +6,19 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests as _requests
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from planner.auth.deps import get_current_user_optional
+from planner.auth.deps import get_current_user
 from planner.db import get_session
 from planner.models import TripPlan, User
+from planner.rate_limit import limiter
 from planner.storage import write_gpx
 
 logging.basicConfig(level=logging.INFO)
@@ -40,16 +41,28 @@ router = APIRouter()
 
 
 @router.post("/api/route/parse")
-async def parse_route(file: UploadFile = File(...)):
+@limiter.limit("30/minute")
+async def parse_route(
+    request: Request,
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+):
     if not file.filename.lower().endswith(".gpx"):
         raise HTTPException(status_code=400, detail="Only GPX uploads are supported for now.")
     data = await file.read()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="GPX file too large (20 MB max).")
     route = parse_gpx_bytes(data)
     return {"route": route}
 
 
 @router.get("/api/trail/suggest")
-async def trail_suggest(q: str = ""):
+@limiter.limit("120/minute")
+async def trail_suggest(
+    request: Request,
+    q: str = "",
+    user: User = Depends(get_current_user),
+):
     """Lightweight typeahead: returns up to 8 trail name+area+id matches for query string `q`."""
     if not q or not q.strip():
         return []
@@ -57,7 +70,8 @@ async def trail_suggest(q: str = ""):
 
 
 @router.post("/api/trail/match")
-async def trail_match(payload: dict):
+@limiter.limit("60/minute")
+async def trail_match(request: Request, payload: dict, user: User = Depends(get_current_user)):
     route = payload.get("route") or {}
     name_hint = (payload.get("name_hint") or "").strip()
     # Allow name-only search without route points
@@ -66,7 +80,8 @@ async def trail_match(payload: dict):
 
 
 @router.post("/api/checks/weather")
-async def check_weather(payload: dict):
+@limiter.limit("60/minute")
+async def check_weather(request: Request, payload: dict, user: User = Depends(get_current_user)):
     lat = payload.get("lat")
     lng = payload.get("lng")
     if not lat or not lng:
@@ -78,7 +93,8 @@ async def check_weather(payload: dict):
 
 
 @router.post("/api/checks/aqi")
-async def check_aqi(payload: dict):
+@limiter.limit("60/minute")
+async def check_aqi(request: Request, payload: dict, user: User = Depends(get_current_user)):
     lat = payload.get("lat")
     lng = payload.get("lng")
     if not lat or not lng:
@@ -90,7 +106,8 @@ async def check_aqi(payload: dict):
 
 
 @router.post("/api/checks/fire")
-async def check_fire(payload: dict):
+@limiter.limit("60/minute")
+async def check_fire(request: Request, payload: dict, user: User = Depends(get_current_user)):
     lat = payload.get("lat")
     lng = payload.get("lng")
     radius = payload.get("radius", 50.0)
@@ -103,7 +120,8 @@ async def check_fire(payload: dict):
 
 
 @router.post("/api/checks/snow")
-async def check_snow(payload: dict):
+@limiter.limit("60/minute")
+async def check_snow(request: Request, payload: dict, user: User = Depends(get_current_user)):
     lat = payload.get("lat")
     lng = payload.get("lng")
     start_date = payload.get("start_date")
@@ -118,20 +136,24 @@ async def check_snow(payload: dict):
 
 
 @router.post("/api/plan")
+@limiter.limit("20/minute")
 async def plan_trip(
+    request: Request,
     file: UploadFile = File(...),
     start_date: str = Form(...),
     end_date: str = Form(...),
     name_hint: Optional[str] = Form(None),
     selected_trail_id: Optional[str] = Form(None),
     save: Optional[str] = Form(None),
-    user: Optional[User] = Depends(get_current_user_optional),
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     if not file.filename.lower().endswith(".gpx"):
         raise HTTPException(status_code=400, detail="Only GPX uploads are supported for now.")
 
     data = await file.read()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="GPX file too large (20 MB max).")
     route = parse_gpx_bytes(data)
 
     match_result = match_trail(route, name_hint=name_hint or "")
@@ -178,7 +200,7 @@ async def plan_trip(
     map_layers = build_map_layers(route, fire)
 
     response = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "route": route,
         "trail_match": match_result,
         "selected_trail": selected,
@@ -223,7 +245,8 @@ async def plan_trip(
 
 
 @router.post("/api/checks/water")
-async def check_water(payload: dict):
+@limiter.limit("60/minute")
+async def check_water(request: Request, payload: dict, user: User = Depends(get_current_user)):
     lat = payload.get("lat")
     lng = payload.get("lng")
     radius = payload.get("radius", 0.5)
@@ -237,7 +260,8 @@ async def check_water(payload: dict):
 
 
 @router.post("/api/plan/report")
-async def plan_report(payload: dict):
+@limiter.limit("10/minute")
+async def plan_report(request: Request, payload: dict, user: User = Depends(get_current_user)):
     trail_name = payload.get("trail_name") or "Unknown Trail"
     area = payload.get("area") or ""
     total_miles = float(payload.get("total_miles") or 0)
