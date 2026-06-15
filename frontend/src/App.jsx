@@ -3,6 +3,7 @@ import mapboxgl from "mapbox-gl";
 import "./index.css";
 import AccountMenu from "./components/AccountMenu.jsx";
 import SaveTripButton from "./components/SaveTripButton.jsx";
+import { authedFetch } from "./api/client.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -663,7 +664,7 @@ function TrailSearchInput({ trailName, setTrailName, onNameSearch, onSuggestionS
     debounceRef.current = setTimeout(async () => {
       setSuggestLoading(true);
       try {
-        const res = await fetch(`/api/trail/suggest?q=${encodeURIComponent(val.trim())}`);
+        const res = await authedFetch(`/api/trail/suggest?q=${encodeURIComponent(val.trim())}`);
         const data = await res.json();
         setSuggestions(Array.isArray(data) ? data : []);
         setShowDropdown(Array.isArray(data) && data.length > 0);
@@ -1608,7 +1609,7 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
     setAiLoading(true);
     setAiReport(null);
     try {
-      const res = await fetch("/api/plan/report", {
+      const res = await authedFetch("/api/plan/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1702,9 +1703,12 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
               </div>
             )}
 
-            {/* Error state */}
-            {aiReport?.error && !aiLoading && (
-              <p className="text-sm text-red-400">{aiReport.error}</p>
+            {/* Unavailable state — the AI brief is best-effort; degrade quietly. */}
+            {aiReport?.error && !ai?.situation_brief && !aiLoading && (
+              <p className="text-sm text-slate-400">
+                AI situation brief is unavailable right now. The condition checks and risk
+                flags below are unaffected.
+              </p>
             )}
 
             {/* Situation Brief */}
@@ -2254,7 +2258,7 @@ function ExploreView({ onBack, isDark }) {
   const handleNameSearch = async () => {
     if (!trailName.trim()) return;
     try {
-      const res = await fetch("/api/trail/match", {
+      const res = await authedFetch("/api/trail/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ route: { points: [] }, name_hint: trailName }),
@@ -2275,7 +2279,7 @@ function ExploreView({ onBack, isDark }) {
     setSelectedTrail(trail);
     setStep("map");
     try {
-      const res = await fetch("/api/trail/match", {
+      const res = await authedFetch("/api/trail/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ route: { points: [] }, name_hint: trail.name }),
@@ -2291,7 +2295,7 @@ function ExploreView({ onBack, isDark }) {
     const formData = new FormData();
     formData.append("file", selectedFile);
     try {
-      const res = await fetch("/api/route/parse", { method: "POST", body: formData });
+      const res = await authedFetch("/api/route/parse", { method: "POST", body: formData });
       const data = await res.json();
       if (data.route) { setGpxRoute(data.route); setStep("map"); }
     } catch { /* ignore */ }
@@ -2437,14 +2441,14 @@ export function PlanView({ onBack, isDark }) {
     formData.append("file", selectedFile);
     setLoading(true);
     try {
-      const res = await fetch("/api/route/parse", { method: "POST", body: formData });
+      const res = await authedFetch("/api/route/parse", { method: "POST", body: formData });
       const data = await res.json();
       if (data.route) {
         setRoute(data.route);
         setGpxRoute(data.route);
         // Immediately run trail match from GPX
         try {
-          const mr = await fetch("/api/trail/match", {
+          const mr = await authedFetch("/api/trail/match", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ route: data.route, name_hint: "" }),
@@ -2463,7 +2467,7 @@ export function PlanView({ onBack, isDark }) {
     if (!trailName.trim()) return;
     setGpxRoute(null);
     try {
-      const res = await fetch("/api/trail/match", {
+      const res = await authedFetch("/api/trail/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ route: { points: [] }, name_hint: trailName }),
@@ -2488,7 +2492,7 @@ export function PlanView({ onBack, isDark }) {
     setNameSearchResults([]);
     goTo("match");
     try {
-      const res = await fetch("/api/trail/match", {
+      const res = await authedFetch("/api/trail/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ route: { points: [] }, name_hint: trail.name }),
@@ -2530,7 +2534,7 @@ export function PlanView({ onBack, isDark }) {
     setChecksLoading({ weather: true, aqi: true, fire: true, snow: true, water: true });
 
     const postJson = (url, body) =>
-      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+      authedFetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
 
     const runCheck = async (key, url, body) => {
       const result = await postJson(url, body);

@@ -16,6 +16,15 @@ async function authHeader(extraHeaders = {}) {
   return headers;
 }
 
+// Drop-in replacement for window.fetch that attaches the Firebase bearer token
+// and prefixes the API base. Returns the raw Response so existing call sites that
+// inspect `res.ok` / `res.json()` keep working. Use for the planner/checks
+// endpoints in App.jsx which now require authentication.
+export async function authedFetch(path, init = {}) {
+  const headers = await authHeader(init.headers || {});
+  return fetch(`${API_BASE}${path}`, { ...init, headers });
+}
+
 async function request(path, { method = "GET", body, headers, isForm } = {}) {
   const baseHeaders = await authHeader(headers);
   const opts = { method, headers: baseHeaders };
