@@ -73,15 +73,29 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    networks:
+      # Internal app network: reach the backend container by name.
+      default: {}
+      # External network shared with the Cloudflare Tunnel. Point the tunnel's
+      # service URL at http://backcountry:80 (the alias below).
+      proxy:
+        aliases:
+          - backcountry
+    # Host port no longer required for the tunnel (it reaches us over `proxy`),
+    # but kept for local debugging. Remove this block to stop publishing 8088.
     ports:
-      # Single host port the Cloudflare Tunnel points at. Change PUBLIC_PORT in .env
-      # if 8088 collides with something else on your host.
       - "${PUBLIC_PORT:-8088}:80"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+networks:
+  # Pre-existing network your Cloudflare Tunnel container is attached to.
+  proxy:
+    external: true
+    name: proxy
 
 volumes:
   pgdata:
