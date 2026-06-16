@@ -31,6 +31,12 @@ services:
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-https://your.tunnel.hostname}
       FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # AI situation brief. Set OPENAI_API_KEY to use OpenAI; otherwise it falls
+      # back to OLLAMA_BASE_URL/OLLAMA_MODEL (and degrades quietly if unreachable).
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
       AIRNOW_API_KEY: ${AIRNOW_API_KEY:-}
       FIRE_CACHE_TTL_SECONDS: ${FIRE_CACHE_TTL_SECONDS:-21600}
       SNOW_CACHE_TTL_SECONDS: ${SNOW_CACHE_TTL_SECONDS:-3600}

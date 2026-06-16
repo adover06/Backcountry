@@ -13,8 +13,26 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# Provider selection:
+#   - If OPENAI_API_KEY is set, talk to OpenAI directly (model from LLM_MODEL).
+#   - Otherwise fall back to an OpenAI-compatible endpoint (e.g. a local Ollama).
+# Both paths use the `openai` SDK; only base_url / api_key / model differ.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://chinky.gerardconsuelo.com/v1")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
+
+
+def _client_and_model(timeout: int):
+    """Return (OpenAI client, model name) for whichever provider is configured."""
+    from openai import OpenAI
+
+    if OPENAI_API_KEY:
+        # Real OpenAI: default base_url (api.openai.com).
+        return OpenAI(api_key=OPENAI_API_KEY, timeout=timeout), LLM_MODEL
+    # OpenAI-compatible fallback (local/self-hosted).
+    return OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama", timeout=timeout), OLLAMA_MODEL
 
 
 def _strip_think(text: str) -> str:
@@ -111,17 +129,16 @@ def generate_report(
     timeout: int = 180,
 ) -> dict:
     try:
-        from openai import OpenAI
+        client, model = _client_and_model(timeout)
     except ImportError:
         return {"error": "openai package not installed", "sections": None}
 
     prompt = _build_prompt(trail_name, area, total_miles, trip_type, num_days, checks)
-    logger.info(f"Generating situation brief for {trail_name} ({num_days}d)")
+    logger.info(f"Generating situation brief for {trail_name} ({num_days}d) via {model}")
 
     try:
-        client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama", timeout=timeout)
         response = client.chat.completions.create(
-            model=OLLAMA_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=600,
@@ -129,7 +146,7 @@ def generate_report(
         raw = response.choices[0].message.content
         parsed = _parse_json(raw)
         if parsed:
-            return {"sections": parsed, "model": OLLAMA_MODEL}
+            return {"sections": parsed, "model": model}
         # If JSON parse failed, return raw for debugging
         logger.warning(f"Could not parse JSON from AI response: {raw[:200]}")
         return {"error": "AI response was not valid JSON", "raw": raw[:500], "sections": None}
