@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-01
+# OpenTrails — session handoff — 2026-09-01
 
 State: **working and verified.** 80 tests pass, frontend builds. Index holds **10,370**
 California trails — all with real DEM elevation, **3,265 with named scenery tags**,

@@ -54,6 +54,9 @@ services:
       # Mounted rather than baked into the image: the index plus the raw source is
       # ~330 MB, which has no business inside a layer.
       - ./data:/app/data:ro
+      # Photo lookups are resolved on demand and cached; without a volume every
+      # container rebuild re-queries Commons for every trail viewed.
+      - photocache_local:/app/.photo_cache
     ports:
       - "6767:6767"
     healthcheck:
@@ -84,3 +87,4 @@ services:
 volumes:
   pgdata_local:
   gpxdata_local:
+  photocache_local:

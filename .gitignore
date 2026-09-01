@@ -223,6 +223,12 @@ data/pois.json
 # Wikimedia Commons photo lookups — rebuildable cache
 .photo_cache/
 
-# Firebase service account holds a private key — never commit
+# Firebase service accounts hold a private key — never commit.
+# Covers both our canonical filename and the console's download name, which is
+# shaped like backcountry-8220a-firebase-adminsdk-fbsvc-02a8d5f780.json and
+# matches none of the obvious patterns.
 data/firebase-service-account.json
 *service-account*.json
+*serviceaccount*.json
+*firebase-adminsdk*.json
+*-adminsdk-*.json
