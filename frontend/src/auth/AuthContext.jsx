@@ -64,7 +64,10 @@ export function AuthProvider({ children }) {
   }, []);
 
   const redeemInvite = useCallback(async (code) => {
-    const me = await api.post("/api/auth/signup", { invite_code: code.trim() });
+    // Send null rather than "" when blank — admins sign up without a code, and the
+    // server distinguishes "no code given" from "empty code given".
+    const trimmed = (code || "").trim();
+    const me = await api.post("/api/auth/signup", { invite_code: trimmed || null });
     setAppUser(me);
     setNeedsInvite(false);
     return me;

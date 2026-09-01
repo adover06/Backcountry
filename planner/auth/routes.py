@@ -34,7 +34,10 @@ class UserOut(BaseModel):
 
 
 class SignupIn(BaseModel):
-    invite_code: str = Field(min_length=4, max_length=64)
+    # Optional: admins sign up without one. Requiring it here made the admin
+    # bypass inside signup() unreachable — Pydantic rejected the request before
+    # the handler could check, so the first user could never be created.
+    invite_code: Optional[str] = Field(default=None, max_length=64)
 
 
 class ProfileUpdateIn(BaseModel):
@@ -103,7 +106,10 @@ async def signup(
 
     code: InviteCode | None = None
     if not is_admin:
-        code = await session.get(InviteCode, payload.invite_code.strip())
+        submitted = (payload.invite_code or "").strip()
+        if not submitted:
+            raise HTTPException(status_code=400, detail="An invite code is required")
+        code = await session.get(InviteCode, submitted)
         if not code:
             raise HTTPException(status_code=400, detail="Invalid invite code")
         if code.redeemed_by:
