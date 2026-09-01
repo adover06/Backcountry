@@ -2534,10 +2534,10 @@ export function PlanView({ onBack, isDark }) {
       });
       const data = await res.json();
       const full = data.shortlist?.find((t) => t.id === trail.id) || data.auto_selected || trail;
-      setTrailMatch({ auto_selected: full, shortlist: data.shortlist || [full] });
+      setTrailMatch({ auto_selected: full, shortlist: data.shortlist || [full], confidence: data.confidence });
       setSelectedTrail(full);
       if (full.route_type) setTripType(full.route_type === "loop" ? "loop" : "out-and-back");
-    } catch { setTrailMatch({ auto_selected: trail, shortlist: [trail] }); }
+    } catch { setTrailMatch({ auto_selected: trail, shortlist: [trail], confidence: "low" }); }
   };
 
   // ── Deep link from discovery ──
@@ -2823,7 +2823,15 @@ const resolveInitialTheme = () => {
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [appMode, setAppMode] = useState("dashboard");
+  // Open straight into the planner when discovery deep-links a trail
+  // (/plan?trail=<id>). App is a mode switch, not a router, so without this the
+  // dashboard renders and PlanView — which does the actual trail loading — never
+  // mounts. That is why the link appeared to "go to the home page".
+  const [appMode, setAppMode] = useState(() => {
+    if (typeof window === "undefined") return "dashboard";
+    const params = new URLSearchParams(window.location.search);
+    return params.get("trail") ? "plan" : "dashboard";
+  });
   const [theme, setTheme] = useState(resolveInitialTheme);
   const [manualTheme, setManualTheme] = useState(() => {
     const stored = getStoredTheme();
