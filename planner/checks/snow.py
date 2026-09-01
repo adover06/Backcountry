@@ -71,13 +71,21 @@ def get_snow_summary(lat: float, lng: float, start_date: str, end_date: str, rad
             ],
         }
 
+        avg_depth_in = (
+            round(sum(depths_m) / len(depths_m) * 39.3701, 1) if depths_m else None
+        )
+
         result = {
             "status": "ok",
             "provider": "Open-Meteo",
             "message": message,
             "max_depth_in": max_depth_in,
-            "avg_depth_in": max_depth_in,
+            # Previously this was set to max_depth_in, reporting a single sample as
+            # though it were an average.
+            "avg_depth_in": avg_depth_in,
             "max_snowfall_in": total_snowfall_in,
+            "sample_point": [sample_lng, sample_lat],
+            "sample_count": len(depths_m),
             "geojson": geojson,
         }
         SNOW_CACHE.set(cache_key, result)

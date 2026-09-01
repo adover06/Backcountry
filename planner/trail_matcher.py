@@ -14,6 +14,9 @@ from data import get_trails
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Past this distance from the route midpoint, there is no plausible match.
+MAX_MATCH_DISTANCE_MI = 25.0
+
 
 def _distance_miles(lat1, lng1, lat2, lng2) -> float:
     r = 3958.8
@@ -125,24 +128,44 @@ def match_trail(route: dict, name_hint: str = "") -> dict:
     scored = []
     for t in trails:
         d = _distance_miles(lat, lng, t["lat"], t["lng"])
-        name = t["name"].lower()
+        if d > MAX_MATCH_DISTANCE_MI:
+            continue
+        name = (t.get("name") or "").lower()
         score = max(0.0, 5.0 - d)  # closer is better
         if hint and hint in name:
             score += 3.0
         scored.append((score, d, t))
 
+    # Previously every trail scored 0.0 past 5 mi and the nearest was returned
+    # regardless, so an Oregon route auto-selected a California trail hundreds of
+    # miles away. Beyond the cutoff there is now simply no match.
+    if not scored:
+        return {
+            "shortlist": [],
+            "auto_selected": None,
+            "confidence": "none",
+            "message": (
+                f"No known trail within {MAX_MATCH_DISTANCE_MI:.0f} mi of this route. "
+                "The dataset covers California National Forest trails."
+            ),
+        }
+
     scored.sort(key=lambda x: (-x[0], x[1]))
     shortlist = [s[2] for s in scored[:5]]
-    auto_selected = shortlist[0] if shortlist else None
+    best_score, best_distance, _ = scored[0]
 
-    confidence = "low"
-    if shortlist:
-        confidence = "medium" if scored[0][0] >= 3 else "low"
-        if scored[0][0] >= 5:
-            confidence = "high"
+    if best_distance <= 1.0:
+        confidence = "high"
+    elif best_distance <= 3.0:
+        confidence = "medium"
+    else:
+        confidence = "low"
 
     return {
         "shortlist": shortlist,
-        "auto_selected": auto_selected,
+        # A low-confidence guess is offered, never auto-applied: the caller has to
+        # choose, because a wrong trail means checks run in the wrong mountains.
+        "auto_selected": shortlist[0] if confidence in ("high", "medium") else None,
         "confidence": confidence,
+        "best_distance_mi": round(best_distance, 2),
     }

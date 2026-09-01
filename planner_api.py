@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 from planner.route_parser import parse_gpx_bytes
 from planner.trail_matcher import match_trail, suggest_trails
-from planner.checks.weather import get_weather_summary
+from planner.checks.weather import get_active_alerts, get_weather_summary
 from planner.checks.aqi import get_aqi_summary
 from planner.checks.fire import get_fire_summary
 from planner.checks.snow import get_snow_summary
@@ -38,6 +38,45 @@ from planner.itinerary_ai import generate_report
 
 
 router = APIRouter()
+
+
+def _require_coords(payload: dict) -> tuple[float, float]:
+    """Validate lat/lng from a request body.
+
+    Uses an explicit None check: `if not lat` rejects a legitimate 0.0, and
+    coercing silently would let a malformed request run checks at Null Island.
+    """
+    lat, lng = payload.get("lat"), payload.get("lng")
+    if lat is None or lng is None:
+        raise HTTPException(status_code=400, detail="lat and lng required")
+    try:
+        lat, lng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="lat and lng must be numeric")
+    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail="lat/lng out of range")
+    return lat, lng
+
+
+def _bounded_radius(payload: dict, default: float, maximum: float) -> float:
+    """Clamp a client-supplied radius instead of passing it through unvalidated."""
+    try:
+        radius = float(payload.get("radius", default))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="radius must be numeric")
+    return max(0.1, min(radius, maximum))
+
+
+def _highest_route_point(route: dict | None) -> tuple[float, float] | None:
+    """The highest point on the route, used for weather and snow sampling."""
+    points = (route or {}).get("points") or []
+    usable = [p for p in points if isinstance(p.get("ele"), (int, float))]
+    if not usable:
+        return None
+    best = max(usable, key=lambda p: p["ele"])
+    if best.get("lat") is None or best.get("lng") is None:
+        return None
+    return best["lat"], best["lng"]
 
 
 @router.post("/api/route/parse")
@@ -82,23 +121,25 @@ async def trail_match(request: Request, payload: dict, user: User = Depends(get_
 @router.post("/api/checks/weather")
 @limiter.limit("60/minute")
 async def check_weather(request: Request, payload: dict, user: User = Depends(get_current_user)):
-    lat = payload.get("lat")
-    lng = payload.get("lng")
-    if not lat or not lng:
-        raise HTTPException(status_code=400, detail="lat and lng required")
-    logger.info(f"Weather check for {lat}, {lng}")
-    weather = get_weather_summary(lat, lng)
-    logger.info(f"Weather result: {weather}")
+    lat, lng = _require_coords(payload)
+    weather = get_weather_summary(
+        lat, lng, payload.get("start_date"), payload.get("end_date")
+    )
     return weather
+
+
+@router.post("/api/checks/alerts")
+@limiter.limit("60/minute")
+async def check_alerts(request: Request, payload: dict, user: User = Depends(get_current_user)):
+    """Active NWS hazard alerts — the authoritative safety feed."""
+    lat, lng = _require_coords(payload)
+    return get_active_alerts(lat, lng)
 
 
 @router.post("/api/checks/aqi")
 @limiter.limit("60/minute")
 async def check_aqi(request: Request, payload: dict, user: User = Depends(get_current_user)):
-    lat = payload.get("lat")
-    lng = payload.get("lng")
-    if not lat or not lng:
-        raise HTTPException(status_code=400, detail="lat and lng required")
+    lat, lng = _require_coords(payload)
     logger.info(f"AQI check for {lat}, {lng}")
     aqi = get_aqi_summary(lat, lng)
     logger.info(f"AQI result: {aqi}")
@@ -108,11 +149,8 @@ async def check_aqi(request: Request, payload: dict, user: User = Depends(get_cu
 @router.post("/api/checks/fire")
 @limiter.limit("60/minute")
 async def check_fire(request: Request, payload: dict, user: User = Depends(get_current_user)):
-    lat = payload.get("lat")
-    lng = payload.get("lng")
-    radius = payload.get("radius", 50.0)
-    if not lat or not lng:
-        raise HTTPException(status_code=400, detail="lat and lng required")
+    lat, lng = _require_coords(payload)
+    radius = _bounded_radius(payload, 50.0, 200.0)
     logger.info(f"Fire check for {lat}, {lng} (radius: {radius}mi)")
     fire = get_fire_summary({"midpoint": [lat, lng]}, radius_miles=radius)
     logger.info(f"Fire result: {fire.get('count', 'N/A')} perimeters within {radius}mi")
@@ -122,13 +160,10 @@ async def check_fire(request: Request, payload: dict, user: User = Depends(get_c
 @router.post("/api/checks/snow")
 @limiter.limit("60/minute")
 async def check_snow(request: Request, payload: dict, user: User = Depends(get_current_user)):
-    lat = payload.get("lat")
-    lng = payload.get("lng")
+    lat, lng = _require_coords(payload)
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
-    radius = payload.get("radius", 5.0)
-    if not lat or not lng:
-        raise HTTPException(status_code=400, detail="lat and lng required")
+    radius = _bounded_radius(payload, 5.0, 50.0)
     logger.info(f"Snow check for {lat}, {lng} (radius: {radius}mi)")
     snow = get_snow_summary(lat, lng, start_date or "", end_date or "", radius_miles=radius)
     logger.info(f"Snow result: {snow.get('message')}")
@@ -171,29 +206,33 @@ async def plan_trip(
         raise HTTPException(status_code=400, detail="Could not compute route midpoint.")
 
     logger.info(f"Running checks for {midpoint}")
-    
-    logger.info("Fetching weather...")
-    weather = get_weather_summary(midpoint[0], midpoint[1])
-    logger.info(f"Weather done: {list(weather.keys())}")
-    
-    logger.info("Fetching AQI...")
+
+    # Weather is sampled at the route's high point, not its midpoint. Temperature
+    # falls roughly 3.5 F per 1000 ft, so a valley reading understates conditions
+    # at the pass — the more dangerous place.
+    high_point = _highest_route_point(route) or (midpoint[0], midpoint[1])
+
+    weather = get_weather_summary(high_point[0], high_point[1], start_date, end_date)
+    alerts = get_active_alerts(high_point[0], high_point[1])
     aqi = get_aqi_summary(midpoint[0], midpoint[1])
-    logger.info(f"AQI done: {list(aqi.keys())}")
-    
-    logger.info("Fetching fire...")
     fire = get_fire_summary(route)
-    logger.info(f"Fire done: {list(fire.keys())}")
-    
-    logger.info("Fetching snow...")
     snow = get_snow_summary(midpoint[0], midpoint[1], start_date, end_date, route=route)
-    logger.info(f"Snow done: {list(snow.keys())}")
+    water = get_water_summary(
+        midpoint[0], midpoint[1], route_points=(route or {}).get("points")
+    )
 
     checks = {
         "weather": weather,
+        "alerts": alerts,
         "aqi": aqi,
         "fire": fire,
         "snow": snow,
+        "water": water,
     }
+    logger.info(
+        "checks complete: "
+        + ", ".join(f"{k}={(v or {}).get('status', 'ok' if not (v or {}).get('error') else 'error')}" for k, v in checks.items())
+    )
 
     risk = evaluate_risk(checks)
     report = build_ai_report(route, selected, checks, risk)
@@ -247,16 +286,34 @@ async def plan_trip(
 @router.post("/api/checks/water")
 @limiter.limit("60/minute")
 async def check_water(request: Request, payload: dict, user: User = Depends(get_current_user)):
-    lat = payload.get("lat")
-    lng = payload.get("lng")
-    radius = payload.get("radius", 0.5)
+    lat, lng = _require_coords(payload)
+    radius = _bounded_radius(payload, 0.5, 5.0)
     route_points = payload.get("route_points") or None
-    if not lat or not lng:
-        raise HTTPException(status_code=400, detail="lat and lng required")
     logger.info(f"Water check for {lat}, {lng} (radius: {radius}mi, {len(route_points or [])} route pts)")
     water = get_water_summary(lat, lng, radius_miles=radius, route_points=route_points)
     logger.info(f"Water result: {water.get('message')}")
     return water
+
+
+@router.post("/api/risk/evaluate")
+@limiter.limit("60/minute")
+async def risk_evaluate(request: Request, payload: dict, user: User = Depends(get_current_user)):
+    """Score an already-fetched set of checks.
+
+    Exists so the browser never computes its own verdict. Two risk engines that
+    disagree are worse than one: the same trip previously showed "Caution" or
+    "Good to Go" depending only on which flow the user came through.
+    """
+    checks = payload.get("checks") or {}
+    if not isinstance(checks, dict):
+        raise HTTPException(status_code=400, detail="checks must be an object")
+    risk = evaluate_risk(checks)
+    return {
+        "risk": risk,
+        "report": build_ai_report(
+            payload.get("route") or {}, payload.get("selected_trail"), checks, risk
+        ),
+    }
 
 
 @router.post("/api/plan/report")
@@ -270,15 +327,43 @@ async def plan_report(request: Request, payload: dict, user: User = Depends(get_
     days = payload.get("days") or []
     checks = payload.get("checks") or {}
     logger.info(f"AI report for {trail_name} ({num_days} days) with checks")
-    result = generate_report(trail_name, area, total_miles, trip_type, num_days, days, checks)
+    # The brief explains the deterministic verdict; it never produces one.
+    risk = evaluate_risk(checks)
+    result = generate_report(
+        trail_name, area, total_miles, trip_type, num_days, days, checks, risk=risk
+    )
+    result["risk"] = risk
     return result
 
 
 NOHRSC_WMS = "https://mapservices.weather.noaa.gov/raster/services/snow/NOHRSC_Snow_Analysis/MapServer/WMSServer"
 
 @router.get("/api/proxy/snow")
-async def proxy_snow_tile(bbox: str, width: int = 256, height: int = 256):
-    """Proxy NOHRSC WMS tiles to avoid browser CORS restrictions."""
+@limiter.limit("240/minute")
+async def proxy_snow_tile(
+    request: Request,
+    bbox: str,
+    width: int = 256,
+    height: int = 256,
+    user: User = Depends(get_current_user),
+):
+    """Proxy NOHRSC WMS tiles to avoid browser CORS restrictions.
+
+    Authenticated and rate limited: without both, this is an open proxy that
+    anyone can drive arbitrary outbound requests through.
+    """
+    # Validate bbox rather than forwarding client text into an outbound request.
+    try:
+        parts = [float(v) for v in bbox.split(",")]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bbox must be four numbers")
+    if len(parts) != 4:
+        raise HTTPException(status_code=400, detail="bbox must be 'minX,minY,maxX,maxY'")
+    if parts[0] >= parts[2] or parts[1] >= parts[3]:
+        raise HTTPException(status_code=400, detail="bbox min must be less than max")
+    bbox = ",".join(str(v) for v in parts)
+    width = max(1, min(width, 1024))
+    height = max(1, min(height, 1024))
     params = {
         "SERVICE": "WMS",
         "VERSION": "1.1.1",
@@ -328,9 +413,22 @@ COVERAGE_TILE_URLS: dict[str, str] = {
 }
 
 @router.get("/api/proxy/coverage/{provider}/{z}/{x}/{y}")
-async def proxy_coverage_tile(provider: str, z: int, x: int, y: int):
+@limiter.limit("240/minute")
+async def proxy_coverage_tile(
+    request: Request,
+    provider: str,
+    z: int,
+    x: int,
+    y: int,
+    user: User = Depends(get_current_user),
+):
     """Proxy carrier cell-coverage raster tiles to avoid CORS.
     Returns 204 (empty) if the provider URL is not yet configured."""
+    if not 0 <= z <= 22:
+        raise HTTPException(status_code=400, detail="zoom out of range")
+    bound = 2 ** z
+    if not (0 <= x < bound and 0 <= y < bound):
+        raise HTTPException(status_code=400, detail="tile coordinates out of range")
     url_template = COVERAGE_TILE_URLS.get(provider, "")
     if not url_template:
         return Response(content=b"", media_type="image/png", status_code=204)
