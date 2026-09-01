@@ -82,7 +82,7 @@ def _fetch_tile(z: int, x: int, y: int):
         response = requests.get(
             TERRARIUM_URL.format(z=z, x=x, y=y),
             timeout=20,
-            headers={"User-Agent": "BackcountryPlanner/1.0"},
+            headers={"User-Agent": "OpenTrails/1.0"},
         )
         response.raise_for_status()
         payload = response.content

@@ -1,10 +1,10 @@
-# Backcountry Repo Handoff
+# OpenTrails Repo Handoff
 
 This is the working context file for the entire repository. It is meant to let another model or harness take over without re-discovering the project structure, conventions, or current implementation state.
 
 ## One-Line Summary
 
-Backcountry is a California backpacking trip planner with a Python backend, a React/Mapbox frontend, and a separate LangGraph CLI advisor. The web app ingests GPX routes or trail-name searches, runs weather/AQI/fire/snow checks, and renders a full-screen map report with overlay telemetry.
+OpenTrails is a California trail discovery app with a Python backend, a React/Mapbox frontend, and a separate LangGraph CLI advisor. The web app ingests GPX routes or trail-name searches, runs weather/AQI/fire/snow checks, and renders a full-screen map report with overlay telemetry.
 
 ## Current Product Shape
 

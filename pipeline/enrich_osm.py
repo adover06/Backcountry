@@ -151,7 +151,7 @@ def _overpass(query: str, attempts_per_mirror: int = 2) -> dict:
                     mirror,
                     data={"data": query},
                     timeout=240,
-                    headers={"User-Agent": "BackcountryPlanner/1.0 (trail discovery)"},
+                    headers={"User-Agent": "OpenTrails/1.0 (trail discovery)"},
                 )
                 response.raise_for_status()
                 return response.json()

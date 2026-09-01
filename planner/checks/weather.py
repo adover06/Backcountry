@@ -27,7 +27,7 @@ from .cache import TTLCache, env_ttl_seconds
 WEATHER_CACHE = TTLCache(ttl_seconds=env_ttl_seconds("WEATHER_CACHE_TTL_SECONDS", 1800))
 ALERTS_CACHE = TTLCache(ttl_seconds=env_ttl_seconds("ALERTS_CACHE_TTL_SECONDS", 600))
 
-USER_AGENT = "BackcountryPlanner/1.0 (trail conditions; contact via app)"
+USER_AGENT = "OpenTrails/1.0 (trail conditions; contact via app)"
 _HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/geo+json"}
 
 # NWS publishes roughly seven days of forecast periods.

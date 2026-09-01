@@ -1,4 +1,4 @@
-# Backcountry
+# OpenTrails
 
 Explore a little...
 

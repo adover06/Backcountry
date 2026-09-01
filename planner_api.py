@@ -378,7 +378,7 @@ async def proxy_snow_tile(
         "HEIGHT": height,
     }
     try:
-        r = _requests.get(NOHRSC_WMS, params=params, timeout=10, headers={"User-Agent": "BackcountryPlanner/1.0"})
+        r = _requests.get(NOHRSC_WMS, params=params, timeout=10, headers={"User-Agent": "OpenTrails/1.0"})
         r.raise_for_status()
         return Response(
             content=r.content,
@@ -434,7 +434,7 @@ async def proxy_coverage_tile(
         return Response(content=b"", media_type="image/png", status_code=204)
     url = url_template.format(z=z, x=x, y=y)
     try:
-        r = _requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 BackcountryPlanner/1.0"})
+        r = _requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 OpenTrails/1.0"})
         r.raise_for_status()
         return Response(
             content=r.content,

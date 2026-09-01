@@ -47,7 +47,7 @@ REQUEST_PAUSE_SECONDS = float(os.environ.get("PHOTO_PAUSE", "0.5"))
 # Commons returns 429 under sustained querying; back off rather than losing the trail.
 MAX_RETRIES = 4
 
-_HEADERS = {"User-Agent": "BackcountryPlanner/1.0 (personal trail discovery)"}
+_HEADERS = {"User-Agent": "OpenTrails/1.0 (personal trail discovery)"}
 
 # Licenses acceptable for display. Anything else is dropped rather than shown with
 # terms we have not checked.
@@ -152,16 +152,68 @@ _SPECIES_HINT = (
     "flower", "botany", "herbarium", "specimen",
 )
 
+# Orbital and aerial imagery is geotagged to a point on the ground, so it lands
+# inside the search radius for almost any trail. "ISS041-E-34506 - View of Earth"
+# even matched the "view" scenery keyword and ranked first for the Tahoe Rim Trail.
+_NOT_OF_THE_PLACE = (
+    "iss0", "iss ", "view of earth", "from space", "satellite", "landsat",
+    "sentinel-", "aerial view", "from orbit", "space shuttle", "astronaut",
+    "topographic map", "usgs map", "diagram", "logo", "coat of arms", "poster",
+)
 
-def _relevance(title: str | None) -> float:
-    """Higher is more likely to be a usable picture of the place."""
+# Commons near any popular trailhead is full of lodging and vacation snapshots.
+# These share the place name, so the place-token boost alone promotes them over
+# actual landscape — "Dinner at our condo - Tahoe Summit Village" outranked the
+# trail itself.
+_NOT_OUTDOORS = (
+    "dinner", "cooking", "breakfast", "lunch", "condo", "resort", "hotel", "motel",
+    "wedding", "bedroom", "kitchen", "bathroom", "restaurant", "casino", "lobby",
+    "interior", "room ", "buffet", "cocktail", "spa", "gondola ride", "ski lift",
+    "parking garage", "storefront", "shopping", "airport", "conference",
+)
+
+# Words too generic to be evidence on their own.
+_STOPWORDS = {
+    "trail", "trails", "creek", "lake", "river", "fork", "canyon", "national",
+    "forest", "park", "the", "of", "and", "north", "south", "east", "west",
+    "upper", "lower", "big", "little", "mount", "mt",
+}
+
+
+def _tokens(text: str | None) -> set[str]:
+    import re as _re
+
+    if not text:
+        return set()
+    return {t for t in _re.split(r"[^a-z0-9]+", text.lower()) if len(t) > 2}
+
+
+def _relevance(title: str | None, place_tokens: set[str] | None = None) -> float:
+    """Higher is more likely to be a usable picture of *this* place.
+
+    The strongest available signal is whether the filename shares a distinctive
+    word with the trail's own name or its park — Commons filenames are usually
+    descriptive, so "…Eagle Nest, Lake Tahoe" is real evidence for the Tahoe Rim
+    Trail while "View of Earth" is not.
+    """
     if not title:
         return 0.0
     lowered = title.lower()
 
     score = 1.0
+
+    # Named for the same place: the highest-confidence signal we have.
+    if place_tokens:
+        shared = _tokens(lowered) & place_tokens
+        if shared:
+            score += 4.0 + min(2.0, len(shared) - 1)
+
     if any(word in lowered for word in _SCENERY_WORDS):
         score += 2.0
+    if any(hint in lowered for hint in _NOT_OF_THE_PLACE):
+        score -= 6.0  # decisive: never surface these above a real photo
+    if any(hint in lowered for hint in _NOT_OUTDOORS):
+        score -= 4.5  # enough to sink below any genuine outdoor photo
     if any(hint in lowered for hint in _SPECIES_HINT):
         score -= 2.5
     if any(pattern in lowered for pattern in _JUNK_PATTERNS):
@@ -171,6 +223,12 @@ def _relevance(title: str | None) -> float:
     if stem.replace(" ", "").isdigit():
         score -= 2.0
     return score
+
+
+def place_tokens_for(trail: dict) -> set[str]:
+    """Distinctive words from a trail's name and area, minus generic terrain words."""
+    combined = _tokens(trail.get("name")) | _tokens(trail.get("mgmt_area"))
+    return combined - _STOPWORDS
 
 
 def photos_for_trail(trail: dict, geometry: dict) -> list[dict] | None:
@@ -235,8 +293,9 @@ def photos_for_trail(trail: dict, geometry: dict) -> list[dict] | None:
 
     # Rank by relevance first, then proximity. Proximity alone surfaces macro shots
     # of plants and wildlife taken beside the trail over the view from the pass.
+    place = place_tokens_for(trail)
     for photo in found.values():
-        photo["relevance"] = _relevance(photo.get("title"))
+        photo["relevance"] = _relevance(photo.get("title"), place)
 
     photos = sorted(
         found.values(),
@@ -314,7 +373,7 @@ def _load_cache() -> dict[str, list[dict]]:
     return _memory_cache
 
 
-def get_photos(trail_id: str, geometry: dict | None) -> dict:
+def get_photos(trail_id: str, geometry: dict | None, trail: dict | None = None) -> dict:
     """Photos for one trail, cached. Distinguishes 'none found' from 'lookup failed'."""
     cache = _load_cache()
 
@@ -326,7 +385,7 @@ def get_photos(trail_id: str, geometry: dict | None) -> dict:
         return {"status": "ok", "cached": False, "photos": []}
 
     try:
-        photos = photos_for_trail({"id": trail_id}, geometry)
+        photos = photos_for_trail({"id": trail_id, **(trail or {})}, geometry)
     except Exception as exc:
         return {"status": "unavailable", "message": str(exc), "photos": []}
 

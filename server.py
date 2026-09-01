@@ -24,7 +24,7 @@ from planner.trips.routes import router as trips_router
 from planner_api import router as planner_router
 from discovery_api import router as discovery_router
 
-app = FastAPI(title="Backcountry API")
+app = FastAPI(title="OpenTrails API")
 
 # CORS — frontend origin. In dev: http://localhost:5173.
 _origins = [o.strip() for o in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",") if o.strip()]
