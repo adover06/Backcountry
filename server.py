@@ -22,6 +22,7 @@ from planner.db import get_session
 from planner.rate_limit import limiter
 from planner.trips.routes import router as trips_router
 from planner_api import router as planner_router
+from discovery_api import router as discovery_router
 
 app = FastAPI(title="Backcountry API")
 
@@ -42,6 +43,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(trips_router)
+app.include_router(discovery_router)
 app.include_router(planner_router)
 
 
