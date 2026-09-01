@@ -34,7 +34,7 @@ export default function SharePage() {
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 px-6 py-4">
         <span className="text-sm text-slate-400">
-          Shared trip report · Backcountry
+          Shared trip report · OpenTrails
         </span>
       </header>
       <TripView trip={trip} readOnly />

@@ -250,3 +250,38 @@ class TestLicenseFilter:
         assert not _license_ok("Fair use")
         assert not _license_ok("All rights reserved")
         assert not _license_ok(None)
+
+
+class TestPhotoPlaceRelevance:
+    """Proximity puts orbital imagery inside the radius of almost every trail."""
+
+    def _tokens(self):
+        from pipeline.photos import place_tokens_for
+
+        return place_tokens_for({"name": "Tahoe Rim Trail", "mgmt_area": None})
+
+    def test_orbital_imagery_is_rejected(self):
+        # Regression: "ISS041-E-34506 - View of Earth" matched the "view" keyword
+        # and ranked first for the Tahoe Rim Trail.
+        from pipeline.photos import _relevance
+
+        place = self._tokens()
+        assert _relevance("File:ISS041-E-34506 - View of Earth.jpg", place) < 0
+
+    def test_place_name_match_outranks_generic_scenery(self):
+        from pipeline.photos import _relevance
+
+        place = self._tokens()
+        named = _relevance("File:Tahoe Rim Trail near Watson Lake.jpg", place)
+        generic = _relevance("File:A lake with a nice view.jpg", place)
+        assert named > generic
+
+    def test_generic_terrain_words_are_not_evidence(self):
+        from pipeline.photos import place_tokens_for
+
+        # "trail", "lake", "national", "forest" are too common to identify a place.
+        tokens = place_tokens_for(
+            {"name": "Lake Creek Trail", "mgmt_area": "Eldorado National Forest"}
+        )
+        assert "trail" not in tokens and "lake" not in tokens and "forest" not in tokens
+        assert "eldorado" in tokens

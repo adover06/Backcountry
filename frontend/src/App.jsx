@@ -283,7 +283,7 @@ function buildGpx(routePoints, campPositions, itineraryDays, userWaterSpots, nam
   const trkpts = (routePoints || []).map(p =>
     `      <trkpt lat="${p.lat.toFixed(7)}" lon="${p.lng.toFixed(7)}">${p.ele != null ? `<ele>${p.ele.toFixed(1)}</ele>` : ""}</trkpt>`
   ).join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Backcountry Trip Planner" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata><name>${name}</name></metadata>\n${wpts.join("\n")}\n  <trk><name>${name}</name><trkseg>\n${trkpts}\n  </trkseg></trk>\n</gpx>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="OpenTrails" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata><name>${name}</name></metadata>\n${wpts.join("\n")}\n  <trk><name>${name}</name><trkseg>\n${trkpts}\n  </trkseg></trk>\n</gpx>`;
 }
 
 function buildKml(routePoints, campPositions, itineraryDays, userWaterSpots, name) {
@@ -2223,7 +2223,7 @@ function DashboardView({ onNewPlan, onExplore, isDark }) {
       <header className={`border-b sticky top-0 z-30 backdrop-blur ${isDark ? "border-neutral-800 bg-black/90" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-5 sm:px-8 lg:px-12 flex items-center justify-between">
           <div>
-            <p className={`text-xs uppercase tracking-[0.5em] ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>Backcountry</p>
+            <p className={`text-xs uppercase tracking-[0.5em] ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>OpenTrails</p>
             <h1 className={`text-xl font-semibold mt-0.5 ${isDark ? "text-white" : "text-slate-900"}`}>Trip Planner</h1>
           </div>
         </div>
@@ -2540,6 +2540,41 @@ export function PlanView({ onBack, isDark }) {
     } catch { setTrailMatch({ auto_selected: trail, shortlist: [trail] }); }
   };
 
+  // ── Deep link from discovery ──
+  //
+  // "Check conditions for this trail" links to /plan?trail=<id>. Without this the
+  // planner ignored the parameter and dropped the user on the empty upload step,
+  // so the two halves of the app never actually connected.
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandled.current) return;
+    const trailId = new URLSearchParams(window.location.search).get("trail");
+    if (!trailId) return;
+    deepLinkHandled.current = true;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/discover/trail/${encodeURIComponent(trailId)}?include_geometry=false`
+        );
+        if (!res.ok) throw new Error(`Trail lookup failed (${res.status})`);
+        const trail = await res.json();
+        if (cancelled) return;
+        setInputMode("name");
+        await handleNameSelect(trail);
+      } catch (err) {
+        // Fall back to the normal flow rather than stranding the user on a blank step.
+        console.warn("[plan] could not open trail from link:", err);
+        deepLinkHandled.current = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Dates handler ──
 
   const handleDatesNext = () => goTo("itinerary");
@@ -2767,7 +2802,7 @@ export function PlanView({ onBack, isDark }) {
 
 // ─── Theme helpers ─────────────────────────────────────────────────────────────
 
-const THEME_STORAGE_KEY = "backcountry-theme";
+const THEME_STORAGE_KEY = "opentrails-theme";
 
 const getStoredTheme = () => {
   if (typeof window === "undefined") return null;

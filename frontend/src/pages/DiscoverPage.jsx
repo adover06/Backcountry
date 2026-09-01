@@ -13,7 +13,7 @@ const DARK_STYLE = "mapbox://styles/mapbox/dark-v11";
 
 function initialTheme() {
   try {
-    const saved = localStorage.getItem("bc-theme");
+    const saved = localStorage.getItem("opentrails-theme");
     if (saved === "dark" || saved === "light") return saved;
   } catch {
     // private mode / blocked storage — fall through to the OS preference
@@ -324,11 +324,155 @@ function ElevationProfile({ profile, gain, loss, onScrub }) {
   );
 }
 
+const ChevronLeft = (p) => (
+  <svg {...iconBase} {...p}><path d="m15 18-6-6 6-6" /></svg>
+);
+const ChevronRight = (p) => (
+  <svg {...iconBase} {...p}><path d="m9 18 6-6-6-6" /></svg>
+);
+
+/** Full-screen photo viewer. Keeps the user in the app — leaving for Commons to
+ *  see the next picture is the clunky path. The source link stays available, but
+ *  as an explicit choice rather than the only way to view an image. */
+function Lightbox({ photos, index, onClose, onIndex }) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight") onIndex((index + 1) % photos.length);
+      else if (e.key === "ArrowLeft") onIndex((index - 1 + photos.length) % photos.length);
+    };
+    window.addEventListener("keydown", onKey);
+    // Focus the dialog so keys work immediately and screen readers announce it.
+    dialogRef.current?.focus();
+    // Don't let the page scroll behind the overlay.
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [index, photos.length, onClose, onIndex]);
+
+  const photo = photos[index];
+  if (!photo) return null;
+  const caption = photo.title.replace(/^File:/, "").replace(/\.[a-z0-9]+$/i, "");
+
+  return (
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Photo ${index + 1} of ${photos.length}: ${caption}`}
+      tabIndex={-1}
+      onClick={onClose}
+      className="fixed inset-0 z-[100] flex flex-col bg-black/92 backdrop-blur-sm outline-none"
+    >
+      <div className="flex items-center justify-between px-4 py-3 text-white/80">
+        <span className="text-xs tabular-nums">
+          {index + 1} / {photos.length}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close photo viewer"
+          className="cursor-pointer rounded-md p-1.5 transition-colors duration-150 hover:bg-white/10 hover:text-white"
+        >
+          <CloseIcon width={20} height={20} />
+        </button>
+      </div>
+
+      {/* Stop propagation so clicking the image itself doesn't dismiss. */}
+      <div
+        className="relative flex flex-1 items-center justify-center px-4 pb-2 min-h-0"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {photos.length > 1 && (
+          <button
+            type="button"
+            onClick={() => onIndex((index - 1 + photos.length) % photos.length)}
+            aria-label="Previous photo"
+            className="absolute left-4 z-10 grid h-11 w-11 cursor-pointer place-items-center rounded-full bg-white/10 text-white transition-colors duration-150 hover:bg-white/20"
+          >
+            <ChevronLeft width={22} height={22} />
+          </button>
+        )}
+
+        <img
+          src={photo.url || photo.thumb}
+          alt={caption}
+          className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+        />
+
+        {photos.length > 1 && (
+          <button
+            type="button"
+            onClick={() => onIndex((index + 1) % photos.length)}
+            aria-label="Next photo"
+            className="absolute right-4 z-10 grid h-11 w-11 cursor-pointer place-items-center rounded-full bg-white/10 text-white transition-colors duration-150 hover:bg-white/20"
+          >
+            <ChevronRight width={22} height={22} />
+          </button>
+        )}
+      </div>
+
+      <div
+        className="px-6 pb-5 pt-2 text-center text-white/70"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="text-sm text-white/90">{caption}</p>
+        <p className="mt-1 text-[11px]">
+          {photo.artist ? `${photo.artist} · ` : ""}
+          {photo.license}
+          {photo.distance_mi != null && ` · ${photo.distance_mi} mi from trail`}
+          {photo.descriptionurl && (
+            <>
+              {" · "}
+              <a
+                href={photo.descriptionurl}
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-white"
+              >
+                view on Commons
+              </a>
+            </>
+          )}
+        </p>
+      </div>
+
+      {photos.length > 1 && (
+        <div
+          className="flex justify-center gap-1.5 pb-5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {photos.map((thumb, i) => (
+            <button
+              key={thumb.title}
+              type="button"
+              onClick={() => onIndex(i)}
+              aria-label={`Go to photo ${i + 1}`}
+              aria-current={i === index}
+              className={classNames(
+                "h-1.5 cursor-pointer rounded-full transition-all duration-200",
+                i === index ? "w-6 bg-white" : "w-1.5 bg-white/35 hover:bg-white/60"
+              )}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PhotoStrip({ trailId }) {
   const [state, setState] = useState({ loading: true, photos: [], error: null });
+  const [lightbox, setLightbox] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
+    setLightbox(null);
     setState({ loading: true, photos: [], error: null });
     authedFetch(`/api/discover/trail/${trailId}/photos`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("photo lookup failed"))))
@@ -364,27 +508,41 @@ function PhotoStrip({ trailId }) {
   return (
     <div>
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {state.photos.map((photo) => (
-          <a
+        {state.photos.map((photo, i) => (
+          <button
             key={photo.title}
-            href={photo.descriptionurl}
-            target="_blank"
-            rel="noreferrer"
-            className="shrink-0 group"
+            type="button"
+            onClick={() => setLightbox(i)}
+            aria-label={`Open photo ${i + 1} of ${state.photos.length}`}
             title={`${photo.title.replace(/^File:/, "")} — ${photo.license}`}
+            className="group relative shrink-0 cursor-pointer overflow-hidden rounded-lg border border-[var(--line)] transition-all duration-200 hover:border-[var(--accent)]"
           >
             <img
               src={photo.thumb}
-              alt={photo.title.replace(/^File:/, "").replace(/\.[a-z]+$/i, "")}
+              alt={photo.title.replace(/^File:/, "").replace(/\.[a-z0-9]+$/i, "")}
               loading="lazy"
-              className="h-24 w-36 object-cover rounded-lg border border-[var(--line)] group-hover:border-emerald-400"
+              className="h-24 w-36 object-cover transition-transform duration-300 group-hover:scale-[1.04]"
             />
-          </a>
+            {i === 0 && state.photos.length > 1 && (
+              <span className="absolute bottom-1 right-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                {state.photos.length}
+              </span>
+            )}
+          </button>
         ))}
       </div>
+
+      {lightbox !== null && (
+        <Lightbox
+          photos={state.photos}
+          index={lightbox}
+          onIndex={setLightbox}
+          onClose={() => setLightbox(null)}
+        />
+      )}
       {/* Proximity is not depiction: say how the photos were chosen. */}
       <p className="mt-1 text-[10px] text-[var(--fg-3)]">
-        Wikimedia Commons, taken near this trail · CC-licensed, credit the author when reusing
+        Wikimedia Commons, taken near this trail · CC-licensed · click to enlarge
       </p>
     </div>
   );
@@ -693,7 +851,7 @@ export default function DiscoverPage() {
     document.documentElement.setAttribute("data-theme", theme);
     setPalette(readPalette());
     try {
-      localStorage.setItem("bc-theme", theme);
+      localStorage.setItem("opentrails-theme", theme);
     } catch {
       // storage unavailable; the theme still applies for this session
     }
@@ -1157,7 +1315,7 @@ export default function DiscoverPage() {
     <div className="h-screen flex flex-col bg-[var(--sunken)]">
       {/* Header */}
       <header className="shrink-0 border-b border-[var(--line)] bg-[var(--panel)] px-5 py-3 flex items-center gap-4 z-20">
-        <h1 className="text-[15px] font-semibold tracking-[-0.01em] text-[var(--fg)]">Backcountry</h1>
+        <h1 className="text-[15px] font-semibold tracking-[-0.01em] text-[var(--fg)]">OpenTrails</h1>
         <div className="flex-1 max-w-md">
           <input
             value={filters.q}
