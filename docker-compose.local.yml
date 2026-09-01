@@ -1,0 +1,86 @@
+# Zero-config local stack.
+#
+#     docker compose -f docker-compose.local.yml up --build
+#     open http://localhost:8088
+#
+# Differs from docker-compose.yml (the tunnel deployment) in three ways, each of
+# which is a hard failure locally:
+#
+#   * no external `proxy` network — compose refuses to start if it does not exist
+#   * no Firebase secret mount — a missing file aborts the container
+#   * discovery is browsable without signing in
+#
+# The only thing you must supply is a Mapbox token, either in a `.env` beside this
+# file or inline:  VITE_MAPBOX_TOKEN=pk.xxx docker compose -f docker-compose.local.yml up
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: backcountry
+      POSTGRES_PASSWORD: backcountry
+      POSTGRES_DB: backcountry
+    volumes:
+      - pgdata_local:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U backcountry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://backcountry:backcountry@postgres:5432/backcountry
+      STORAGE_ROOT: /var/lib/backcountry/gpx
+      FRONTEND_ORIGIN: http://localhost:8088
+      AIRNOW_API_KEY: ${AIRNOW_API_KEY:-}
+      FIRE_HISTORY_DAYS: ${FIRE_HISTORY_DAYS:-60}
+      # Where discover.py reads the prebuilt index from (mounted below).
+      TRAILS_SOURCE: /app/data/trails.geojson
+      # Drop your service account JSON at ./data/firebase-service-account.json and
+      # it is picked up here. Absent is fine — the API just runs unauthenticated.
+      FIREBASE_SERVICE_ACCOUNT_PATH: /app/data/firebase-service-account.json
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+    volumes:
+      - gpxdata_local:/var/lib/backcountry/gpx
+      # Mounted rather than baked into the image: the index plus the raw source is
+      # ~330 MB, which has no business inside a layer.
+      - ./data:/app/data:ro
+    ports:
+      - "6767:6767"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:6767/api/health').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: ""
+        VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
+        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
+        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
+        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
+        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${PUBLIC_PORT:-8088}:80"
+
+volumes:
+  pgdata_local:
+  gpxdata_local:

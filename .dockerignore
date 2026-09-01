@@ -11,3 +11,13 @@ frontend/dist/
 !.env.example
 var/
 alltrails_manual_collection/
+
+# Trail data is mounted at runtime (see docker-compose*.yml), not baked in:
+# the raw source plus the built index is ~330 MB.
+data/
+.dem_cache/
+.osm_cache/
+.gnis_cache/
+.nps_cache/
+.photo_cache/
+tests/
