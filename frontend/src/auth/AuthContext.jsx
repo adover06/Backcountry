@@ -5,7 +5,7 @@ import {
 } from "firebase/auth";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api } from "../api/client";
-import { auth, googleProvider } from "./firebase";
+import { auth, firebaseEnabled, googleProvider } from "./firebase";
 
 const AuthContext = createContext(null);
 
@@ -36,6 +36,12 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    // No Firebase configured: settle immediately as signed out. Discovery is
+    // public, so the app is fully usable in this state.
+    if (!firebaseEnabled || !auth) {
+      setLoading(false);
+      return undefined;
+    }
     const unsub = onAuthStateChanged(auth, async (u) => {
       setFirebaseUser(u);
       if (u) {
@@ -50,6 +56,9 @@ export function AuthProvider({ children }) {
   }, [fetchAppUser]);
 
   const signInGoogle = useCallback(async () => {
+    if (!auth || !googleProvider) {
+      throw new Error("Sign-in is unavailable: Firebase is not configured.");
+    }
     await signInWithPopup(auth, googleProvider);
     // onAuthStateChanged will fire and populate appUser / needsInvite.
   }, []);
@@ -62,7 +71,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await signOut(auth);
+    if (auth) await signOut(auth);
   }, []);
 
   const updateProfile = useCallback(async (patch) => {
@@ -79,6 +88,7 @@ export function AuthProvider({ children }) {
         appUser,
         needsInvite,
         loading,
+        firebaseEnabled,
         signInGoogle,
         redeemInvite,
         logout,

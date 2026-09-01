@@ -8,7 +8,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 async function authHeader(extraHeaders = {}) {
   const headers = { ...extraHeaders };
-  const user = auth.currentUser;
+  const user = auth?.currentUser;
   if (user) {
     const token = await user.getIdToken();
     headers["Authorization"] = `Bearer ${token}`;
