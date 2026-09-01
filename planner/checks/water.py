@@ -84,7 +84,7 @@ def get_water_summary(
             OVERPASS_URL,
             data={"data": query},
             timeout=30,
-            headers={"User-Agent": "BackcountryPlanner/1.0"},
+            headers={"User-Agent": "OpenTrails/1.0"},
         )
         resp.raise_for_status()
         data = resp.json()

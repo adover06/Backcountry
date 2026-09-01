@@ -27,7 +27,11 @@ def get_aqi_summary(lat: float, lng: float) -> dict:
 
     api_key = os.environ.get("AIRNOW_API_KEY", AIRNOW_API_KEY)
     if not api_key:
-        return {"error": "AQI unavailable", "observations": []}
+        return {
+            "status": "unavailable",
+            "message": "AIRNOW_API_KEY not configured",
+            "observations": [],
+        }
 
     url = (
         "https://www.airnowapi.org/aq/observation/latLong/current/"
@@ -41,17 +45,24 @@ def get_aqi_summary(lat: float, lng: float) -> dict:
             r.raise_for_status()
             data = r.json()
             result = {
+                "status": "ok",
+                "provider": "AirNow",
                 "observations": [
                     {
                         "parameter": o.get("ParameterName"),
                         "aqi": o.get("AQI"),
                         "category": (o.get("Category") or {}).get("Name"),
+                        "site": o.get("ReportingArea"),
                     }
                     for o in data
-                ]
+                ],
+                # AirNow searches this far for a monitor. In the backcountry the
+                # nearest station is often well outside it, which is why an empty
+                # observation list means "no data", never "clean air".
+                "search_radius_mi": 25,
             }
             AQI_CACHE.set(cache_key, result)
             return result
         except Exception as e:
             last_err = e
-    return {"error": str(last_err), "observations": []}
+    return {"status": "unavailable", "message": str(last_err), "observations": []}

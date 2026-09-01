@@ -6,6 +6,7 @@ import "./index.css";
 import { AuthProvider } from "./auth/AuthContext.jsx";
 import RequireAuth from "./auth/RequireAuth.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
+import DiscoverPage from "./pages/DiscoverPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import SharePage from "./pages/SharePage.jsx";
@@ -17,8 +18,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <BrowserRouter>
       <AuthProvider>
         <Routes>
+          {/* Discovery is the front door and is browsable without an account:
+              trail geometry is public reference data, and a login wall in front of
+              a map buys nothing. Saving trips, the planner, and admin still
+              require auth. */}
+          <Route path="/" element={<DiscoverPage />} />
           <Route
-            path="/"
+            path="/plan"
             element={
               <RequireAuth>
                 <App />

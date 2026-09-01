@@ -36,32 +36,14 @@ function haversineMiles(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function computeRisk(checks) {
-  let status = "go";
-  const reasons = [];
-  for (const obs of checks.aqi?.observations || []) {
-    if (obs.aqi >= 150) { status = "no-go"; reasons.push(`AQI ${obs.aqi} (${obs.category})`); }
-    else if (obs.aqi >= 100 && status !== "no-go") { status = "caution"; reasons.push(`AQI ${obs.aqi} (${obs.category})`); }
-  }
-  // Only flag caution for fires within 5 miles and updated within the last year
-  const nearbyRecentFires = (checks.fire?.perimeters?.features || []).filter(f => {
-    const d = f.properties?.distance_from_midpoint_mi;
-    const days = f.properties?.days_since_update;
-    return (d == null || d <= 5) && (days == null || days <= 365);
-  });
-  if (nearbyRecentFires.length) {
-    if (status === "go") status = "caution";
-    reasons.push(`${nearbyRecentFires.length} fire perimeter(s) within 5 mi (past year)`);
-  }
-  const snowDepth = checks.snow?.max_depth_in;
-  if (snowDepth >= 12 && status !== "no-go") { status = "caution"; reasons.push(`Snow depth ~${snowDepth} in`); }
-  return { status, reasons };
-}
+// The risk engine lives on the server (planner/risk_engine.py). A second copy here
+// used different fire and snow rules, so the same trip could read "Caution" or
+// "Good to Go" depending only on which flow produced it. Do not reintroduce one.
 
 function buildReport(trail, risk) {
   const bullets = [`Status: ${risk.status.toUpperCase()}`];
   if (trail) bullets.push(`Route: ${trail.name} in ${trail.area}`);
-  for (const r of risk.reasons) bullets.push(r);
+  for (const r of risk.reasons || []) bullets.push(typeof r === "string" ? r : r.message);
   return { format: "bullets", bullets };
 }
 
@@ -151,7 +133,24 @@ function snapToTrail(pts, lat, lng, maxRadiusMi = 0.4) {
 }
 
 function getDaytimePeriods(forecast) {
-  return (forecast || []).filter(p => !/night|tonight/i.test(p.name || ""));
+  // Prefer the explicit NWS flag; fall back to the name for older cached payloads.
+  return (forecast || []).filter(p =>
+    p.is_daytime != null ? p.is_daytime : !/night|tonight/i.test(p.name || "")
+  );
+}
+
+function getNightPeriods(forecast) {
+  return (forecast || []).filter(p =>
+    p.is_daytime != null ? p.is_daytime === false : /night|tonight/i.test(p.name || "")
+  );
+}
+
+// The overnight low is the number that sets your bag rating and your hypothermia
+// margin. Showing only daytime highs hid it entirely.
+function coldestOvernight(forecast) {
+  const nights = getNightPeriods(forecast).filter(p => typeof p.temp === "number");
+  if (!nights.length) return null;
+  return nights.reduce((a, b) => (b.temp < a.temp ? b : a));
 }
 
 function checkStatus(key, data) {
@@ -284,7 +283,7 @@ function buildGpx(routePoints, campPositions, itineraryDays, userWaterSpots, nam
   const trkpts = (routePoints || []).map(p =>
     `      <trkpt lat="${p.lat.toFixed(7)}" lon="${p.lng.toFixed(7)}">${p.ele != null ? `<ele>${p.ele.toFixed(1)}</ele>` : ""}</trkpt>`
   ).join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Backcountry Trip Planner" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata><name>${name}</name></metadata>\n${wpts.join("\n")}\n  <trk><name>${name}</name><trkseg>\n${trkpts}\n  </trkseg></trk>\n</gpx>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="OpenTrails" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata><name>${name}</name></metadata>\n${wpts.join("\n")}\n  <trk><name>${name}</name><trkseg>\n${trkpts}\n  </trkseg></trk>\n</gpx>`;
 }
 
 function buildKml(routePoints, campPositions, itineraryDays, userWaterSpots, name) {
@@ -1575,11 +1574,21 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
   }
 
   const daytimePeriods = getDaytimePeriods(checks?.weather?.forecast);
-  const risk = planResult?.risk || computeRisk(checks || {});
+  const nightPeriods = getNightPeriods(checks?.weather?.forecast);
+  const coldestNight = coldestOvernight(checks?.weather?.forecast);
+  const risk = planResult?.risk || {
+    status: "incomplete",
+    reasons: [],
+    unavailable_checks: [],
+    summary: "Conditions have not been checked yet.",
+  };
   const riskColor = risk.status === "no-go"
     ? { bg: "bg-red-50 border-red-200", text: "text-red-700", badge: "bg-red-600", label: "No-Go" }
     : risk.status === "caution"
     ? { bg: "bg-amber-50 border-amber-200", text: "text-amber-700", badge: "bg-amber-500", label: "Caution" }
+    : risk.status === "incomplete"
+    // Never green: a check that could not run is not a check that passed.
+    ? { bg: "bg-slate-100 border-slate-300", text: "text-slate-700", badge: "bg-slate-500", label: "Incomplete" }
     : { bg: "bg-emerald-50 border-emerald-200", text: "text-emerald-700", badge: "bg-emerald-600", label: "Good to Go" };
 
   const totalMiles = rawMiles > 0
@@ -1721,7 +1730,8 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
               <ul className="mt-4 space-y-1 pt-4 border-t border-slate-100">
                 {risk.reasons.map((r, i) => (
                   <li key={i} className={`text-xs flex gap-2 ${riskColor.text}`}>
-                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current inline-block" />{r}
+                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current inline-block" />
+                    {typeof r === "string" ? r : r.message}
                   </li>
                 ))}
               </ul>
@@ -1738,6 +1748,13 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
                   value: checks?.weather?.forecast?.[0]?.short || "—",
                   sub: checks?.weather?.forecast?.[0]?.temp != null ? `${checks.weather.forecast[0].temp}${checks.weather.forecast[0].temp_unit} · ${checks.weather.forecast[0].wind}` : "",
                   warn: /thunder|severe|shower|rain/i.test(checks?.weather?.forecast?.[0]?.short || ""),
+                },
+                {
+                  // Overnight low decides your bag rating; it was previously never shown.
+                  label: "Coldest night",
+                  value: coldestNight?.temp != null ? `${coldestNight.temp}${coldestNight.temp_unit}` : "—",
+                  sub: coldestNight ? coldestNight.name : "no overnight forecast",
+                  warn: typeof coldestNight?.temp === "number" && coldestNight.temp <= 32,
                 },
                 {
                   label: "AQI",
@@ -1811,6 +1828,7 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
               <div className="space-y-4">
                 {itineraryDays.map((day, i) => {
                   const period = daytimePeriods[i];
+                  const night = nightPeriods[i];
                   const wText = (period?.short || "").toLowerCase();
                   const isWarn = /thunder|severe/.test(wText);
                   const isCaution = /shower|rain|drizzle|snow/.test(wText);
@@ -1840,6 +1858,23 @@ function ReportStep({ planResult, selectedTrail, startDate, itineraryDays, route
                             <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400 mt-0.5 w-16 shrink-0">Weather</span>
                             <p className="text-sm text-slate-700">{period.short} · {period.temp}{period.temp_unit} · {period.wind}</p>
                           </div>
+                        )}
+
+                        {/* Overnight low — what you actually pack for. */}
+                        {night && (
+                          <div className="flex items-start gap-3">
+                            <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400 mt-0.5 w-16 shrink-0">Overnight</span>
+                            <p className={`text-sm ${typeof night.temp === "number" && night.temp <= 32 ? "font-semibold text-sky-700" : "text-slate-700"}`}>
+                              {night.temp}{night.temp_unit} low · {night.short}
+                              {typeof night.temp === "number" && night.temp <= 32 && " · below freezing"}
+                            </p>
+                          </div>
+                        )}
+
+                        {!period && !night && (
+                          <p className="text-xs text-slate-400 italic">
+                            No NWS forecast covers this day yet.
+                          </p>
                         )}
 
                         {/* Camp location — from dragged marker */}
@@ -2188,7 +2223,7 @@ function DashboardView({ onNewPlan, onExplore, isDark }) {
       <header className={`border-b sticky top-0 z-30 backdrop-blur ${isDark ? "border-neutral-800 bg-black/90" : "border-slate-200/70 bg-[#f6f3ee]/95"}`}>
         <div className="mx-auto max-w-7xl px-6 py-5 sm:px-8 lg:px-12 flex items-center justify-between">
           <div>
-            <p className={`text-xs uppercase tracking-[0.5em] ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>Backcountry</p>
+            <p className={`text-xs uppercase tracking-[0.5em] ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>OpenTrails</p>
             <h1 className={`text-xl font-semibold mt-0.5 ${isDark ? "text-white" : "text-slate-900"}`}>Trip Planner</h1>
           </div>
         </div>
@@ -2505,6 +2540,41 @@ export function PlanView({ onBack, isDark }) {
     } catch { setTrailMatch({ auto_selected: trail, shortlist: [trail] }); }
   };
 
+  // ── Deep link from discovery ──
+  //
+  // "Check conditions for this trail" links to /plan?trail=<id>. Without this the
+  // planner ignored the parameter and dropped the user on the empty upload step,
+  // so the two halves of the app never actually connected.
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandled.current) return;
+    const trailId = new URLSearchParams(window.location.search).get("trail");
+    if (!trailId) return;
+    deepLinkHandled.current = true;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authedFetch(
+          `/api/discover/trail/${encodeURIComponent(trailId)}?include_geometry=false`
+        );
+        if (!res.ok) throw new Error(`Trail lookup failed (${res.status})`);
+        const trail = await res.json();
+        if (cancelled) return;
+        setInputMode("name");
+        await handleNameSelect(trail);
+      } catch (err) {
+        // Fall back to the normal flow rather than stranding the user on a blank step.
+        console.warn("[plan] could not open trail from link:", err);
+        deepLinkHandled.current = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Dates handler ──
 
   const handleDatesNext = () => goTo("itinerary");
@@ -2554,8 +2624,32 @@ export function PlanView({ onBack, isDark }) {
     ]);
 
     const allChecks = { weather, aqi, fire, snow, water };
-    const risk = computeRisk(allChecks);
-    const report = buildReport(selectedTrail, risk);
+    // The verdict comes from the server's single risk engine, never from a second
+    // copy of the rules in the browser.
+    let risk = null;
+    let report = null;
+    try {
+      const scored = await authedFetch("/api/risk/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ checks: allChecks, selected_trail: selectedTrail, route: gpxRoute }),
+      }).then((r) => (r.ok ? r.json() : null));
+      risk = scored?.risk || null;
+      report = scored?.report || null;
+    } catch {
+      risk = null;
+    }
+    if (!risk) {
+      // Never fall back to a locally-invented verdict: say the check did not run.
+      risk = {
+        status: "incomplete",
+        reasons: [{ check: "risk", severity: "incomplete", message: "Could not reach the risk engine" }],
+        reason_text: ["Could not reach the risk engine"],
+        unavailable_checks: ["risk"],
+        complete: false,
+        summary: "Cannot give a verdict: the risk engine could not be reached.",
+      };
+    }
     setPlanResult({
       route: gpxRoute,
       selected_trail: selectedTrail,
@@ -2708,7 +2802,7 @@ export function PlanView({ onBack, isDark }) {
 
 // ─── Theme helpers ─────────────────────────────────────────────────────────────
 
-const THEME_STORAGE_KEY = "backcountry-theme";
+const THEME_STORAGE_KEY = "opentrails-theme";
 
 const getStoredTheme = () => {
   if (typeof window === "undefined") return null;

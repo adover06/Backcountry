@@ -5,7 +5,7 @@ import {
 } from "firebase/auth";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api } from "../api/client";
-import { auth, googleProvider } from "./firebase";
+import { auth, firebaseEnabled, googleProvider } from "./firebase";
 
 const AuthContext = createContext(null);
 
@@ -36,6 +36,12 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    // No Firebase configured: settle immediately as signed out. Discovery is
+    // public, so the app is fully usable in this state.
+    if (!firebaseEnabled || !auth) {
+      setLoading(false);
+      return undefined;
+    }
     const unsub = onAuthStateChanged(auth, async (u) => {
       setFirebaseUser(u);
       if (u) {
@@ -50,19 +56,25 @@ export function AuthProvider({ children }) {
   }, [fetchAppUser]);
 
   const signInGoogle = useCallback(async () => {
+    if (!auth || !googleProvider) {
+      throw new Error("Sign-in is unavailable: Firebase is not configured.");
+    }
     await signInWithPopup(auth, googleProvider);
     // onAuthStateChanged will fire and populate appUser / needsInvite.
   }, []);
 
   const redeemInvite = useCallback(async (code) => {
-    const me = await api.post("/api/auth/signup", { invite_code: code.trim() });
+    // Send null rather than "" when blank — admins sign up without a code, and the
+    // server distinguishes "no code given" from "empty code given".
+    const trimmed = (code || "").trim();
+    const me = await api.post("/api/auth/signup", { invite_code: trimmed || null });
     setAppUser(me);
     setNeedsInvite(false);
     return me;
   }, []);
 
   const logout = useCallback(async () => {
-    await signOut(auth);
+    if (auth) await signOut(auth);
   }, []);
 
   const updateProfile = useCallback(async (patch) => {
@@ -79,6 +91,7 @@ export function AuthProvider({ children }) {
         appUser,
         needsInvite,
         loading,
+        firebaseEnabled,
         signInGoogle,
         redeemInvite,
         logout,

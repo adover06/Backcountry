@@ -20,13 +20,20 @@ def _resolve_source_path() -> Path:
             return p
         raise FileNotFoundError(f"TRAILS_SOURCE points to missing file: {p}")
 
-    preferred = _BASE_DIR / "National_Forest_System_Trails_(Feature_Layer) (3).geojson"
-    if preferred.exists():
-        return preferred
+    # The dataset lives under data/. The old code only looked in the project root
+    # for a filename that is not in the repo, so every load raised FileNotFoundError
+    # and every trail endpoint returned 500.
+    for candidate in (
+        _BASE_DIR / "data" / "trails.geojson",
+        _BASE_DIR / "National_Forest_System_Trails_(Feature_Layer) (3).geojson",
+    ):
+        if candidate.exists():
+            return candidate
 
-    geojson_files = sorted(_BASE_DIR.glob("*.geojson"))
-    if geojson_files:
-        return geojson_files[0]
+    for directory in (_BASE_DIR / "data", _BASE_DIR):
+        geojson_files = sorted(directory.glob("*.geojson"))
+        if geojson_files:
+            return geojson_files[0]
 
     raise FileNotFoundError(
         "No GeoJSON trail source found. Place a .geojson file in the project root "
@@ -187,22 +194,51 @@ def _aggregate_group(trail_id: str, segs: list[tuple[dict, dict]]) -> dict:
 
 
 def load_backpacking_trails() -> list[dict]:
-    """Return normalized trails from the local GeoJSON (grouped by TRAIL_CN)."""
-    source_path = _resolve_source_path()
-    with open(source_path, encoding="utf-8") as f:
-        raw = json.load(f)
+    """Return normalized trails.
 
-    groups: dict[str, list[tuple[dict, dict]]] = defaultdict(list)
-    for feature in raw.get("features", []):
-        props = feature.get("properties") or {}
-        geom = feature.get("geometry") or {}
-        trail_id = str(props.get("TRAIL_CN") or props.get("OBJECTID") or "").strip()
-        if not trail_id:
-            continue
-        groups[trail_id].append((props, geom))
+    Prefers the prebuilt discovery index (which carries real elevation), and falls
+    back to normalizing the raw GeoJSON directly.
 
-    trails = [_aggregate_group(tid, segs) for tid, segs in groups.items() if segs]
-    return trails
+    The previous implementation read UPPERCASE property names (TRAIL_CN, TRAIL_NAME,
+    SEGMENT_LENGTH); the feed uses lowercase. Every lookup missed, so trail_id was
+    always empty and the loader returned zero trails.
+    """
+    try:
+        from planner.discover import load_index
+
+        indexed = load_index()["trails"]
+        if indexed:
+            return [_from_index(t) for t in indexed]
+    except Exception:
+        pass  # fall through to normalizing the source directly
+
+    from pipeline.normalize import normalize_trails
+
+    return [_from_index(t) for t in normalize_trails(_resolve_source_path())]
+
+
+def _from_index(trail: dict) -> dict:
+    """Adapt a normalized/indexed trail to the legacy shape callers expect."""
+    center = trail.get("center") or [0.0, 0.0]
+    elevation = trail.get("elevation") or {}
+    return {
+        "id": trail.get("id", ""),
+        "name": trail.get("name", ""),
+        "area": trail.get("mgmt_area") or trail.get("admin_org") or "",
+        "city": "",
+        "lat": center[1] if len(center) > 1 else 0.0,
+        "lng": center[0] if center else 0.0,
+        "length_miles": trail.get("length_miles", 0.0),
+        # Real DEM-derived gain, or None. Never a hardcoded 0.
+        "elev_gain_ft": trail.get("gain_ft", elevation.get("gain_ft")),
+        "difficulty": (trail.get("difficulty") or {}).get("label")
+        or trail.get("trail_class_label"),
+        "route_type": trail.get("route_type", ""),
+        "features": trail.get("features") or [],
+        "activities": sorted((trail.get("activities") or {}).keys()) or ["hiking"],
+        "slug": trail.get("slug", ""),
+        "geometry": trail.get("geometry"),
+    }
 
 
 # Module-level cache — loaded once
