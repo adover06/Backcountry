@@ -35,6 +35,7 @@ from .gnis import fetch_features as fetch_gnis_features
 from .normalize import normalize_trails
 from .nps import fetch_trails as fetch_nps_trails
 from .nps import fetch_seki, normalize_nps, normalize_seki, poi_records as nps_poi_records
+from .osm_routes import build_routes as build_osm_routes
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = _BASE_DIR / "data"
@@ -100,6 +101,37 @@ def stage_nps(trails: list[dict], verbose: bool) -> list[dict]:
     added = [t for t in nps_trails if t["id"] not in existing]
     if verbose:
         print(f"      added {len(added)} park trails")
+    return trails + added
+
+
+def stage_osm_routes(trails: list[dict], verbose: bool) -> list[dict]:
+    """Add long-distance OSM route relations (JMT, PCT sections, Tahoe Rim, ...).
+
+    Deliberately narrow. OSM does not solve segmentation — it models Half Dome as
+    2.00 mi exactly as the agency data does, because "a 14-mile hike" is a fact
+    about how a trip is composed, not about trail geometry. What relations *do*
+    uniquely provide are multi-day routes that no agency source assembles, so only
+    those are ingested.
+
+    Skipped silently when the osmium extract is absent; it is an optional stage.
+    """
+    if verbose:
+        print("\n[1c] osm — long-distance route relations")
+    try:
+        routes = build_osm_routes(verbose=verbose)
+    except FileNotFoundError as exc:
+        if verbose:
+            print(f"      skipped: {exc}")
+        return trails
+    except Exception as exc:
+        if verbose:
+            print(f"      failed ({exc}) — continuing without OSM routes")
+        return trails
+
+    existing = {t["id"] for t in trails}
+    added = [r for r in routes if r["id"] not in existing]
+    if verbose:
+        print(f"      added {len(added)} routes")
     return trails + added
 
 
@@ -257,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--osm-step", type=float, default=1.0, help="OSM tile size in degrees")
     parser.add_argument("--skip-elevation", action="store_true")
     parser.add_argument("--skip-nps", action="store_true")
+    parser.add_argument("--skip-osm-routes", action="store_true")
     parser.add_argument("--skip-osm", action="store_true")
     parser.add_argument("--with-osm", action="store_true", help="also query Overpass (slow, flaky)")
     parser.add_argument("--resume", action="store_true", help="reuse the previous build")
@@ -276,6 +309,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.skip_nps:
         trails = stage_nps(trails, verbose)
+
+    if not args.skip_osm_routes:
+        trails = stage_osm_routes(trails, verbose)
 
     if not args.skip_elevation:
         trails = stage_elevation(trails, args.workers, verbose)

@@ -245,7 +245,7 @@ async def discovery_trail_photos(
     from pipeline.photos import get_photos
 
     entry = discover.get_geometry(trail_id) or {}
-    return get_photos(trail_id, entry.get("geometry"))
+    return get_photos(trail_id, entry.get("geometry"), trail)
 
 
 @router.get("/trail/{trail_id}")

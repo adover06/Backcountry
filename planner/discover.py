@@ -22,6 +22,8 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable
 
+from rapidfuzz import fuzz
+
 _BASE_DIR = Path(__file__).resolve().parent.parent
 INDEX_PATH = _BASE_DIR / "data" / "trails_index.json"
 GEOM_PATH = _BASE_DIR / "data" / "trails_geom.json"
@@ -212,25 +214,55 @@ def _tokenize(text: str) -> list[str]:
     return [tok for tok in re.split(r"[^a-z0-9]+", text.lower()) if tok]
 
 
-def _text_score(trail: dict, tokens: list[str]) -> float:
-    """Simple token scoring: exact name match beats prefix beats substring."""
-    if not tokens:
+# Minimum fuzzy score to be considered a match at all.
+_FUZZY_FLOOR = 85.0
+
+# Below this length, a query is too short for fuzzy matching to be meaningful —
+# partial_ratio("mist", "mitchell peak") scores high on "mi" alone, which put 265
+# results behind a four-letter query. Short queries must actually appear.
+_SUBSTRING_REQUIRED_BELOW = 6
+
+
+def _text_score(trail: dict, query: str, tokens: list[str]) -> float:
+    """Fuzzy relevance for a free-text query.
+
+    Requiring every token to appear was too strict: "lost coast" matched nothing,
+    because trails named "Lost …" do not contain "coast" and a single missing token
+    disqualified the whole record. Uses the same rapidfuzz approach as the planner's
+    typeahead, which handles word-order and partial names, plus exact/prefix bonuses
+    so "mount whitney" ranks Mount Whitney above Whitney Butte.
+    """
+    if not query:
         return 0.0
+
     name = (trail.get("name") or "").lower()
-    haystack = trail["_search"]
-    score = 0.0
-    for token in tokens:
-        if name == token:
-            score += 100
-        elif name.startswith(token):
-            score += 40
-        elif token in name:
-            score += 20
-        elif token in haystack:
-            score += 5
-        else:
-            return -1.0  # every token must appear somewhere
-    return score
+    if not name:
+        return -1.0
+    area = (trail.get("mgmt_area") or "").lower()
+
+
+    if len(query) < _SUBSTRING_REQUIRED_BELOW and query not in name and query not in area:
+        return -1.0
+
+    # token_set_ratio tolerates word order and extra words; partial_ratio rewards
+    # the query appearing as a run inside a longer name.
+    score = float(max(fuzz.token_set_ratio(query, name), fuzz.partial_ratio(query, name)))
+
+    if area:
+        score += fuzz.partial_ratio(query, area) * 0.25
+
+    if name == query:
+        score += 120
+    elif name.startswith(query):
+        score += 60
+    elif query in name:
+        score += 35
+
+    # Every query token present in the name is a strong signal, but not required.
+    if tokens and all(t in name for t in tokens):
+        score += 25
+
+    return score if score >= _FUZZY_FLOOR else -1.0
 
 
 def search(
@@ -255,6 +287,7 @@ def search(
     """Run a faceted search and return results plus facet counts."""
     index = load_index()
     trails = index["trails"]
+    query_text = (q or "").strip().lower()
     tokens = _tokenize(q) if q else []
 
     matched = []
@@ -310,8 +343,8 @@ def search(
         if accessible_only and trail.get("accessibility") != "ACCESSIBLE":
             continue
 
-        if tokens:
-            score = _text_score(trail, tokens)
+        if query_text:
+            score = _text_score(trail, query_text, tokens)
             if score < 0:
                 continue
             trail = {**trail, "_score": score}
@@ -408,6 +441,12 @@ _PUBLIC_FIELDS = (
     "difficulty",
     "steepness",
     "elevation",
+    # Present only on OSM long-distance routes.
+    "source",
+    "endpoints",
+    "network",
+    "website",
+    "wikipedia",
 )
 
 
