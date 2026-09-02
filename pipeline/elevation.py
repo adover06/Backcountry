@@ -98,8 +98,12 @@ def _fetch_tile(z: int, x: int, y: int):
     return image
 
 
+_warned_missing_pil = False
+
+
 def sample_elevation_m(lat: float, lng: float, zoom: int = TILE_ZOOM) -> float | None:
     """Elevation in meters at a point, or None if the tile could not be read."""
+    global _warned_missing_pil
     try:
         fx, fy = _deg2tile(lat, lng, zoom)
         tx, ty = int(fx), int(fy)
@@ -108,6 +112,19 @@ def sample_elevation_m(lat: float, lng: float, zoom: int = TILE_ZOOM) -> float |
         py = min(TILE_SIZE - 1, max(0, int((fy - ty) * TILE_SIZE)))
         r, g, b = image.getpixel((px, py))
         return (r * 256 + g + b / 256) - 32768
+    except ImportError:
+        # Pillow absent is a broken install, not "this place has no elevation".
+        # Silently returning None here made the routing graph report every hike as
+        # flat in a container where Pillow had not been packaged.
+        if not _warned_missing_pil:
+            _warned_missing_pil = True
+            import logging
+
+            logging.getLogger(__name__).error(
+                "Pillow is not installed — DEM sampling is disabled and all "
+                "elevations will be unknown. Install Pillow."
+            )
+        return None
     except Exception:
         return None
 

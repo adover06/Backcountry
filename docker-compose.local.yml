@@ -54,6 +54,9 @@ services:
       # Mounted rather than baked into the image: the index plus the raw source is
       # ~330 MB, which has no business inside a layer.
       - ./data:/app/data:ro
+      # DEM tiles the index build already fetched. Without them the routing graph
+      # cannot sample node elevations and silently reports every hike as flat.
+      - ./.dem_cache:/app/.dem_cache:ro
       # Photo lookups are resolved on demand and cached; without a volume every
       # container rebuild re-queries Commons for every trail viewed.
       - photocache_local:/app/.photo_cache

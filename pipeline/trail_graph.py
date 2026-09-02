@@ -360,6 +360,14 @@ class TrailGraph:
             "trail_ids": trails,
             "trail_names": [self.trail_names.get(t, t) for t in trails],
             "node_count": len(path),
+            # Drawable geometry, so a caller can render the route rather than
+            # only read its statistics.
+            "coordinates": [
+                list(self.node_coord[n]) for n in path if n in self.node_coord
+            ],
+            "profile": [
+                {"ft": round(self.node_ele[n])} for n in path if n in self.node_ele
+            ],
         }
 
     def _path_gain(self, path: list) -> tuple[int, int]:
@@ -374,7 +382,9 @@ class TrailGraph:
 
         series = [self.node_ele[n] for n in path if n in self.node_ele]
         if len(series) < 2:
-            return 0, 0
+            # Unknown, not flat. Callers must be able to tell the difference —
+            # reporting 0 ft for a Half Dome ascent is worse than saying nothing.
+            return None, None
         gain, loss = compute_gain(series)
         return int(round(gain)), int(round(loss))
 
@@ -385,18 +395,26 @@ class TrailGraph:
             return None
         # Walking back reverses the profile, so the return leg climbs exactly what
         # the outbound leg descended.
-        total_gain = (
-            leg["gain_ft_one_way"] + leg.get("loss_ft_one_way", 0)
-            if out_and_back
-            else leg["gain_ft_one_way"]
-        )
+        out_gain = leg["gain_ft_one_way"]
+        out_loss = leg.get("loss_ft_one_way")
+        if out_gain is None:
+            total_gain = None
+        elif out_and_back:
+            total_gain = out_gain + (out_loss or 0)
+        else:
+            total_gain = out_gain
         return {
             "miles": round(leg["miles_one_way"] * (2 if out_and_back else 1), 2),
             "gain_ft": total_gain,
             "one_way_miles": leg["miles_one_way"],
+            "gain_ft_one_way": leg["gain_ft_one_way"],
+            "loss_ft_one_way": leg.get("loss_ft_one_way", 0),
             "trail_names": leg["trail_names"],
+            "trail_ids": leg["trail_ids"],
             "segments_used": len(leg["trail_ids"]),
             "route_type": "out-and-back" if out_and_back else "point-to-point",
+            "coordinates": leg.get("coordinates") or [],
+            "node_count": leg.get("node_count", 0),
         }
 
 

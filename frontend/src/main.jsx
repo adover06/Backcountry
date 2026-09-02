@@ -7,6 +7,7 @@ import { AuthProvider } from "./auth/AuthContext.jsx";
 import RequireAuth from "./auth/RequireAuth.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
 import DiscoverPage from "./pages/DiscoverPage.jsx";
+import GraphPage from "./pages/GraphPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import SharePage from "./pages/SharePage.jsx";
@@ -31,6 +32,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               </RequireAuth>
             }
           />
+          {/* Routing-graph inspector. Public like discovery: it reads the same
+              public trail data and is the only way to see the graph work. */}
+          <Route path="/graph" element={<GraphPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route
             path="/trips"

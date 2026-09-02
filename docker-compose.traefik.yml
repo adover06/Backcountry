@@ -53,6 +53,9 @@ services:
     volumes:
       # Read-only: the index and secrets are built/placed outside the container.
       - ./data:/app/data:ro
+      # DEM tiles the index build already fetched. Without them the routing graph
+      # cannot sample node elevations and silently reports every hike as flat.
+      - ./.dem_cache:/app/.dem_cache:ro
       - gpxdata:/var/lib/backcountry/gpx
       - photocache:/app/.photo_cache
     healthcheck:

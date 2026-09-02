@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from planner import discover
+from planner import discover, graph_service
 from planner.auth.deps import get_current_user_optional
 from planner.models import User
 from planner.rate_limit import limiter
@@ -217,6 +217,44 @@ async def discovery_facets(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return {"total": result["total"], "facets": result["facets"]}
+
+
+@router.get("/graph/status")
+@limiter.limit("60/minute")
+async def graph_status(request: Request):
+    """Graph size and build state. Does not trigger a build."""
+    return graph_service.status()
+
+
+@router.get("/graph/route")
+@limiter.limit("30/minute")
+async def graph_route(
+    request: Request,
+    start: str = Query(..., description="lng,lat"),
+    end: str = Query(..., description="lng,lat"),
+    out_and_back: bool = True,
+    snap: float = Query(0.25, description="miles; how far to look for a trail"),
+    user: Optional[User] = Depends(get_current_user_optional),
+):
+    """Compose a hike between two points on the trail network.
+
+    The first call builds the graph (~14s) and later calls reuse it.
+    """
+    def _point(raw: str, label: str) -> tuple[float, float]:
+        try:
+            lng, lat = (float(v) for v in raw.split(","))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"{label} must be 'lng,lat'")
+        if not (-180 <= lng <= 180) or not (-90 <= lat <= 90):
+            raise HTTPException(status_code=400, detail=f"{label} out of range")
+        return lng, lat
+
+    return graph_service.compose(
+        _point(start, "start"),
+        _point(end, "end"),
+        out_and_back=out_and_back,
+        snap_miles=max(0.02, min(snap, 2.0)),
+    )
 
 
 @router.get("/trail/{trail_id}/photos")

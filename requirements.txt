@@ -120,3 +120,5 @@ zipp==3.23.0
 zstandard==0.25.0
 fastapi
 rapidfuzz
+# DEM tile decoding for pipeline/elevation.py (Terrarium PNGs).
+Pillow>=10.0.0
