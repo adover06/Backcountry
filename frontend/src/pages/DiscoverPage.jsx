@@ -23,6 +23,98 @@ const BASEMAPS = {
   },
 };
 
+// ── Shareable URL state ──────────────────────────────────────────────────────
+//
+// Everything that defines what you are looking at goes in the query string, so a
+// link reproduces the view: the open trail, the filters, where the map is pointing,
+// which basemap, and whether it is tilted. Written with replaceState so panning
+// does not fill the back button with history.
+
+const DEFAULT_FILTERS = {
+  q: "",
+  lengthMin: "",
+  lengthMax: "",
+  gainMin: "",
+  gainMax: "",
+  difficulty: [],
+  steepness: [],
+  features: [],
+  featuresMode: "any",
+  routeType: "",
+  month: "",
+  sort: "relevance",
+};
+
+function readUrlState() {
+  if (typeof window === "undefined") return {};
+  const p = new URLSearchParams(window.location.search);
+  const list = (key) => (p.get(key) ? p.get(key).split(",").filter(Boolean) : []);
+  const view = p.get("c")?.split(",").map(Number);
+
+  return {
+    trailId: p.get("trail") || null,
+    basemap: BASEMAPS[p.get("map")] ? p.get("map") : null,
+    pitched: p.get("3d") === "1",
+    view:
+      view && view.length === 2 && view.every(Number.isFinite)
+        ? { center: view, zoom: Number(p.get("z")) || 11, pitch: Number(p.get("p")) || 0, bearing: Number(p.get("b")) || 0 }
+        : null,
+    filters: {
+      ...DEFAULT_FILTERS,
+      q: p.get("q") || "",
+      lengthMin: p.get("lmin") || "",
+      lengthMax: p.get("lmax") || "",
+      gainMin: p.get("gmin") || "",
+      gainMax: p.get("gmax") || "",
+      difficulty: list("diff"),
+      steepness: list("steep"),
+      features: list("feat"),
+      featuresMode: p.get("fmode") === "all" ? "all" : "any",
+      routeType: p.get("rt") || "",
+      month: p.get("mo") || "",
+      sort: p.get("sort") || "relevance",
+    },
+  };
+}
+
+function writeUrlState({ filters, selectedId, map, basemap, pitched }) {
+  if (typeof window === "undefined") return;
+  const p = new URLSearchParams();
+
+  if (selectedId) p.set("trail", selectedId);
+  if (filters.q) p.set("q", filters.q);
+  if (filters.lengthMin) p.set("lmin", filters.lengthMin);
+  if (filters.lengthMax) p.set("lmax", filters.lengthMax);
+  if (filters.gainMin) p.set("gmin", filters.gainMin);
+  if (filters.gainMax) p.set("gmax", filters.gainMax);
+  if (filters.difficulty.length) p.set("diff", filters.difficulty.join(","));
+  if (filters.steepness.length) p.set("steep", filters.steepness.join(","));
+  if (filters.features.length) {
+    p.set("feat", filters.features.join(","));
+    if (filters.featuresMode === "all") p.set("fmode", "all");
+  }
+  if (filters.routeType) p.set("rt", filters.routeType);
+  if (filters.month) p.set("mo", String(filters.month));
+  if (filters.sort && filters.sort !== "relevance") p.set("sort", filters.sort);
+  if (basemap && basemap !== "terrain") p.set("map", basemap);
+  if (pitched) p.set("3d", "1");
+
+  if (map) {
+    const c = map.getCenter();
+    p.set("c", `${c.lng.toFixed(5)},${c.lat.toFixed(5)}`);
+    p.set("z", map.getZoom().toFixed(2));
+    const pitch = map.getPitch();
+    const bearing = map.getBearing();
+    if (pitch > 1) p.set("p", pitch.toFixed(0));
+    if (Math.abs(bearing) > 1) p.set("b", bearing.toFixed(0));
+  }
+
+  const next = `${window.location.pathname}?${p.toString()}`;
+  if (next !== window.location.pathname + window.location.search) {
+    window.history.replaceState(null, "", next);
+  }
+}
+
 function initialBasemap() {
   try {
     const saved = localStorage.getItem("opentrails-basemap");
@@ -32,6 +124,8 @@ function initialBasemap() {
   }
   return "terrain";
 }
+
+const URL_STATE = typeof window !== "undefined" ? readUrlState() : {};
 
 function initialTheme() {
   try {
@@ -488,6 +582,15 @@ function Lightbox({ photos, index, onClose, onIndex }) {
   );
 }
 
+const ShareIcon = (p) => (
+  <svg {...iconBase} {...p}>
+    <circle cx="18" cy="5" r="3" />
+    <circle cx="6" cy="12" r="3" />
+    <circle cx="18" cy="19" r="3" />
+    <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
+  </svg>
+);
+
 const TicketIcon = (p) => (
   <svg {...iconBase} {...p}>
     <path d="M3 9V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 6v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-6z" />
@@ -933,23 +1036,11 @@ export default function DiscoverPage() {
   // repopulates the GeoJSON sources that setStyle() discarded.
   const [styleEpoch, setStyleEpoch] = useState(0);
   const [palette, setPalette] = useState(() => readPalette());
-  const [basemap, setBasemap] = useState(initialBasemap);
-  const [pitched, setPitched] = useState(false);
+  const [basemap, setBasemap] = useState(() => URL_STATE.basemap || initialBasemap());
+  const [pitched, setPitched] = useState(() => Boolean(URL_STATE.pitched));
 
-  const [filters, setFilters] = useState({
-    q: "",
-    lengthMin: "",
-    lengthMax: "",
-    gainMin: "",
-    gainMax: "",
-    difficulty: [],
-    steepness: [],
-    features: [],
-    featuresMode: "any",
-    routeType: "",
-    month: "",
-    sort: "relevance",
-  });
+  const [filters, setFilters] = useState(() => URL_STATE.filters || DEFAULT_FILTERS);
+  const [copied, setCopied] = useState(false);
 
   // Tailwind reads the class off <html>; persist the choice so it survives reloads.
   useEffect(() => {
@@ -1040,8 +1131,10 @@ export default function DiscoverPage() {
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: BASEMAPS[basemap][theme === "dark" ? "dark" : "light"],
-      center: INITIAL_VIEW.center,
-      zoom: INITIAL_VIEW.zoom,
+      center: URL_STATE.view?.center || INITIAL_VIEW.center,
+      zoom: URL_STATE.view?.zoom ?? INITIAL_VIEW.zoom,
+      pitch: URL_STATE.view?.pitch || 0,
+      bearing: URL_STATE.view?.bearing || 0,
     });
 
     // Record the style we opened with, so the theme effect does not immediately
@@ -1387,6 +1480,31 @@ export default function DiscoverPage() {
     hoveredRef.current = next;
   }, [hovered, selected]);
 
+  // A shared link names a trail; open its panel on load.
+  const sharedTrailOpened = useRef(false);
+  useEffect(() => {
+    if (sharedTrailOpened.current || !URL_STATE.trailId) return;
+    sharedTrailOpened.current = true;
+    loadTrail(URL_STATE.trailId, { fit: !URL_STATE.view });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep the address bar in step with the view, so the link is always current.
+  useEffect(() => {
+    if (!mapReady) return;
+    const sync = () =>
+      writeUrlState({
+        filters,
+        selectedId: selected?.id || null,
+        map: map.current,
+        basemap,
+        pitched,
+      });
+    sync();
+    map.current?.on("moveend", sync);
+    return () => map.current?.off("moveend", sync);
+  }, [filters, selected, basemap, pitched, mapReady]);
+
   // Draw the selected trail as its own emphasised layer.
   useEffect(() => {
     const source = map.current?.getSource?.("selected-route");
@@ -1486,13 +1604,13 @@ export default function DiscoverPage() {
   const mapMissing = !MAPBOX_TOKEN;
 
   const loadTrail = useCallback(
-    async (id) => {
+    async (id, { fit = true } = {}) => {
       try {
         const res = await authedFetch(`/api/discover/trail/${id}`);
         if (!res.ok) throw new Error("Could not load trail");
         const trail = await res.json();
         setSelected(trail);
-        if (trail.bbox && map.current) {
+        if (fit && trail.bbox && map.current) {
           map.current.fitBounds(
             [
               [trail.bbox[0], trail.bbox[1]],
@@ -1536,6 +1654,28 @@ export default function DiscoverPage() {
             className="w-full rounded-full border border-[var(--line)] bg-[var(--sunken)] text-[var(--fg)] placeholder:text-[var(--fg-3)] px-4 py-2 text-sm focus:border-[var(--accent)] focus:outline-none"
           />
         </div>
+        <button
+          type="button"
+          onClick={async () => {
+            // The address bar is already current, so the link is just this URL.
+            try {
+              await navigator.clipboard.writeText(window.location.href);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            } catch {
+              // Clipboard blocked (insecure origin, permissions) — select it
+              // instead so the user can copy manually rather than nothing happening.
+              window.prompt("Copy this link", window.location.href);
+            }
+          }}
+          title="Copy a link to this exact view"
+          aria-label="Copy a link to this view"
+          className="flex cursor-pointer items-center gap-1.5 rounded-full border border-[var(--line)] px-3 py-1 text-xs text-[var(--fg-2)] transition-colors duration-200 hover:border-[var(--line-strong)] hover:text-[var(--fg)]"
+        >
+          <ShareIcon width={13} height={13} />
+          {copied ? "Copied" : "Share"}
+        </button>
+
         <button
           type="button"
           onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
