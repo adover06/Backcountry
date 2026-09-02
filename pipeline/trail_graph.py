@@ -109,6 +109,10 @@ class TrailGraph:
     def __init__(self) -> None:
         # node -> list of (neighbour, miles, gain_ft, trail_id)
         self.adjacency: dict[tuple[int, int], list[tuple]] = defaultdict(list)
+        # (a, b) -> the trail's real coordinates between those nodes. Without this a
+        # route can only be drawn node-to-node, which renders a trail with no
+        # junctions as a single straight line across the mountain.
+        self.edge_shape: dict[tuple, list[list[float]]] = {}
         self.node_coord: dict[tuple[int, int], tuple[float, float]] = {}
         self.node_ele: dict[tuple[int, int], float] = {}
         self.trail_names: dict[str, str] = {}
@@ -279,6 +283,14 @@ class TrailGraph:
             # Climb is filled in later from per-node DEM samples.
             self.adjacency[a].append((b, seg_miles, 0.0, trail_id))
             self.adjacency[b].append((a, seg_miles, 0.0, trail_id))
+
+            # Keep the vertices this edge actually follows, thinned a little: a
+            # drawn route must trace the trail, not cut between its endpoints.
+            shape = line[start : i + 1]
+            if len(shape) > 60:
+                step = len(shape) / 60
+                shape = [shape[int(k * step)] for k in range(60)] + [shape[-1]]
+            self.edge_shape.setdefault((a, b), shape)
             start = i
             running_at_split = running
 
@@ -360,15 +372,40 @@ class TrailGraph:
             "trail_ids": trails,
             "trail_names": [self.trail_names.get(t, t) for t in trails],
             "node_count": len(path),
-            # Drawable geometry, so a caller can render the route rather than
-            # only read its statistics.
-            "coordinates": [
-                list(self.node_coord[n]) for n in path if n in self.node_coord
-            ],
+            # Drawable geometry that follows the trail, assembled from the edge
+            # shapes rather than joining node positions.
+            "coordinates": self._path_shape(path),
             "profile": [
                 {"ft": round(self.node_ele[n])} for n in path if n in self.node_ele
             ],
         }
+
+    def _path_shape(self, path: list) -> list[list[float]]:
+        """Trace the real trail vertices along a node path.
+
+        Joining node positions draws a straight line wherever a trail has no
+        junction between its ends — a 2.5 mi trail became one segment cutting
+        across the terrain. Each edge carries the vertices it actually follows, so
+        they are stitched here, reversed when the edge is walked backwards.
+        """
+        shape: list[list[float]] = []
+        for a, b in zip(path, path[1:]):
+            piece = self.edge_shape.get((a, b))
+            if piece is None:
+                piece = self.edge_shape.get((b, a))
+                if piece is not None:
+                    piece = list(reversed(piece))
+            if not piece:
+                # A stitch edge, or geometry we never stored: fall back to the
+                # straight hop between the two nodes rather than dropping it.
+                piece = [
+                    list(self.node_coord[n]) for n in (a, b) if n in self.node_coord
+                ]
+            for point in piece:
+                point = list(point)
+                if not shape or shape[-1] != point:
+                    shape.append(point)
+        return shape
 
     def _path_gain(self, path: list) -> tuple[int, int]:
         """Ascent and descent along a node path, with the DEM noise threshold.
