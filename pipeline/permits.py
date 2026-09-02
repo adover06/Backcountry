@@ -13,10 +13,19 @@ proximity rather than expecting any shared identifier.
     Requires a free key: https://ridb.recreation.gov/profile  ->  API Key
     Then:  RIDB_API_KEY=... in .env
 
-STATUS: written against the documented API but NOT verified against a live
-response — every endpoint returns 401 without a key, so the response shapes below
-are from the docs, not observed. Treat the field mapping as unconfirmed until it
-has run once with a real key.
+Verified against the live API. Findings that changed the implementation:
+
+* `/permitentrances` looks like the obvious endpoint and is not: 907 nationally but
+  only **34 in California**, named as opaque codes ("AA01", "YOS1"), with no Half
+  Dome or Whitney entry at all.
+* Permits are modelled as **facilities** with `FacilityTypeDescription == "Permit"`.
+  There are only **7 in California**, but they are precisely the ones that gate
+  California hiking: Half Dome, Inyo NF Wilderness (Whitney), Sequoia & Kings
+  Canyon, Desolation, Hoover, Cedar Creek Falls.
+
+Because a wilderness permit governs an entire forest from a single coordinate, the
+join radius is deliberately wide and the result is advisory: "a permit may apply
+here, check", never "you need this exact permit".
 """
 
 from __future__ import annotations
@@ -38,8 +47,10 @@ PERMITS_PATH = Path(__file__).resolve().parent.parent / "data" / "permits.json"
 
 CALIFORNIA_BBOX = (-124.5, 32.5, -114.1, 42.1)
 
-# A permit desk further than this from the trail is not that trail's permit.
-MATCH_RADIUS_MI = 3.0
+# Wide on purpose. "Inyo National Forest - Wilderness Permits" is a single point
+# that governs the whole eastern Sierra, so a tight radius would attach it to almost
+# nothing. The consequence is that matches are advisory, and labelled as such.
+MATCH_RADIUS_MI = 35.0
 
 PAGE_SIZE = 50
 MAX_PAGES = 60
@@ -92,34 +103,34 @@ def fetch_permit_facilities(use_cache: bool = True, verbose: bool = True) -> lis
         )
         batch = payload.get("RECDATA") or []
         for facility in batch:
-            lat, lng = facility.get("FacilityLatitude"), facility.get("FacilityLongitude")
-            if not lat or not lng:
+            # The authoritative signal, confirmed against the live API. Matching on
+            # the name instead pulls in campgrounds and misses the real permits.
+            facility_type = facility.get("FacilityTypeDescription") or ""
+            if facility_type not in ("Permit", "Ticket Facility", "Timed Entry"):
                 continue
 
-            reservable = bool(facility.get("Reservable"))
-            type_name = (facility.get("FacilityTypeDescription") or "").lower()
+            # RIDB keeps deprecated entries live, marked in the name. "(OLD) Mt.
+            # Whitney (OLD)" was outranking the current Inyo wilderness permit.
             name = facility.get("FacilityName") or ""
-            # Permit-issuing facilities are typed as permits, or are reservable
-            # entries whose name says so.
-            looks_like_permit = (
-                "permit" in type_name
-                or "permit" in name.lower()
-                or "wilderness" in name.lower()
-            )
-            if not (looks_like_permit or reservable):
+            if "(OLD)" in name.upper() or name.upper().startswith("OLD "):
+                continue
+
+            lat, lng = facility.get("FacilityLatitude"), facility.get("FacilityLongitude")
+            if not lat or not lng:
                 continue
 
             records.append(
                 {
                     "id": str(facility.get("FacilityID")),
                     "name": name,
-                    "type": facility.get("FacilityTypeDescription"),
-                    "reservable": reservable,
-                    "url": facility.get("FacilityReservationURL") or facility.get("FacilityURL"),
+                    "type": facility_type,
+                    "reservable": bool(facility.get("Reservable")),
+                    "url": facility.get("FacilityReservationURL"),
                     "phone": facility.get("FacilityPhone"),
+                    "description": (facility.get("FacilityDescription") or "")[:400],
                     "lat": float(lat),
                     "lng": float(lng),
-                    "is_permit": looks_like_permit,
+                    "is_permit": facility_type == "Permit",
                 }
             )
 
@@ -177,6 +188,9 @@ def enrich_trail(trail: dict, grid: PointGrid, geometry: dict | None, stride: in
             "url": p.get("url"),
             "distance_mi": p["distance_mi"],
             "reservable": p.get("reservable"),
+            # A single coordinate stands in for a whole wilderness, so this is a
+            # prompt to check rather than a statement that the permit applies.
+            "advisory": True,
         }
         for p in permits
     ]
