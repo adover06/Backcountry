@@ -11,6 +11,28 @@ const INITIAL_VIEW = { center: [-119.4179, 37.7783], zoom: 5.4 };
 const LIGHT_STYLE = "mapbox://styles/mapbox/outdoors-v12";
 const DARK_STYLE = "mapbox://styles/mapbox/dark-v11";
 
+// Basemaps. Satellite + the DEM gives the Google-Earth read: real tree cover, rock,
+// snow and drainages with the terrain actually raised, which is far more useful for
+// judging a route than a topo tint.
+const BASEMAPS = {
+  terrain: { label: "Terrain", light: LIGHT_STYLE, dark: DARK_STYLE },
+  satellite: {
+    label: "Satellite",
+    light: "mapbox://styles/mapbox/satellite-streets-v12",
+    dark: "mapbox://styles/mapbox/satellite-streets-v12",
+  },
+};
+
+function initialBasemap() {
+  try {
+    const saved = localStorage.getItem("opentrails-basemap");
+    if (saved && BASEMAPS[saved]) return saved;
+  } catch {
+    // storage unavailable
+  }
+  return "terrain";
+}
+
 function initialTheme() {
   try {
     const saved = localStorage.getItem("opentrails-theme");
@@ -827,6 +849,8 @@ export default function DiscoverPage() {
   // repopulates the GeoJSON sources that setStyle() discarded.
   const [styleEpoch, setStyleEpoch] = useState(0);
   const [palette, setPalette] = useState(() => readPalette());
+  const [basemap, setBasemap] = useState(initialBasemap);
+  const [pitched, setPitched] = useState(false);
 
   const [filters, setFilters] = useState({
     q: "",
@@ -867,12 +891,27 @@ export default function DiscoverPage() {
   // Swap the basemap when the theme changes, then reinstall our layers.
   useEffect(() => {
     if (!map.current || !mapReady) return;
-    const wanted = theme === "dark" ? DARK_STYLE : LIGHT_STYLE;
+    const wanted = BASEMAPS[basemap][theme === "dark" ? "dark" : "light"];
     if (map.current.__styleUrl === wanted) return;
     map.current.__styleUrl = wanted;
     map.current.setStyle(wanted);
+    try {
+      localStorage.setItem("opentrails-basemap", basemap);
+    } catch {
+      // storage unavailable
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme, mapReady]);
+  }, [theme, basemap, mapReady]);
+
+  // 3D tilt. Terrain is always loaded; this just leans the camera into it.
+  useEffect(() => {
+    if (!map.current || !mapReady) return;
+    map.current.easeTo({
+      pitch: pitched ? 62 : 0,
+      bearing: pitched ? -18 : 0,
+      duration: 900,
+    });
+  }, [pitched, mapReady]);
 
   const update = useCallback((patch) => setFilters((f) => ({ ...f, ...patch })), []);
 
@@ -916,14 +955,14 @@ export default function DiscoverPage() {
     mapboxgl.accessToken = MAPBOX_TOKEN;
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
-      style: theme === "dark" ? DARK_STYLE : LIGHT_STYLE,
+      style: BASEMAPS[basemap][theme === "dark" ? "dark" : "light"],
       center: INITIAL_VIEW.center,
       zoom: INITIAL_VIEW.zoom,
     });
 
     // Record the style we opened with, so the theme effect does not immediately
     // re-set the same style and race the initial layer install.
-    map.current.__styleUrl = theme === "dark" ? DARK_STYLE : LIGHT_STYLE;
+    map.current.__styleUrl = BASEMAPS[basemap][theme === "dark" ? "dark" : "light"];
 
     map.current.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
     map.current.addControl(new mapboxgl.ScaleControl({ unit: "imperial" }), "bottom-right");
@@ -1086,9 +1125,14 @@ export default function DiscoverPage() {
             maxzoom: 14,
           });
         }
-        map.current.setTerrain({ source: "mapbox-dem", exaggeration: 1.15 });
+        // Slightly more relief under satellite, where there is no topo shading to
+        // carry the shape.
+        map.current.setTerrain({
+          source: "mapbox-dem",
+          exaggeration: basemap === "satellite" ? 1.35 : 1.15,
+        });
 
-        if (!map.current.getLayer("hillshade")) {
+        if (basemap !== "satellite" && !map.current.getLayer("hillshade")) {
           // Under the trail lines, over the basemap fills.
           map.current.addLayer(
             {
@@ -1623,6 +1667,43 @@ export default function DiscoverPage() {
             onClear={() => setCompare([])}
             onFocus={(t) => loadTrail(t.id)}
           />
+
+          {/* Basemap + 3D controls */}
+          <div className="absolute left-4 top-4 z-10 flex flex-col gap-2">
+            <div className="flex overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--glass)] backdrop-blur-xl shadow-[var(--e2)]">
+              {Object.entries(BASEMAPS).map(([key, config]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setBasemap(key)}
+                  aria-pressed={basemap === key}
+                  className={classNames(
+                    "cursor-pointer px-3 py-1.5 text-xs font-medium transition-colors duration-200",
+                    basemap === key
+                      ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+                      : "text-[var(--fg-2)] hover:text-[var(--fg)]"
+                  )}
+                >
+                  {config.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setPitched((p) => !p)}
+              aria-pressed={pitched}
+              title={pitched ? "Back to flat view" : "Tilt into 3D terrain"}
+              className={classNames(
+                "cursor-pointer self-start rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200 backdrop-blur-xl shadow-[var(--e2)]",
+                pitched
+                  ? "border-transparent bg-[var(--accent)] text-[var(--accent-fg)]"
+                  : "border-[var(--line)] bg-[var(--glass)] text-[var(--fg-2)] hover:text-[var(--fg)]"
+              )}
+            >
+              {pitched ? "2D" : "3D"}
+            </button>
+          </div>
 
           {/* Legend */}
           <div
