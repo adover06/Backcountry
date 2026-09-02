@@ -1,0 +1,105 @@
+# Production stack behind Traefik.
+#
+#     docker compose -f docker-compose.traefik.yml up -d --build
+#
+# Traefik on this host runs with exposedbydefault=false and
+# providers.docker.network=public, so only the frontend is labelled and joined to
+# `public`. Postgres and the backend stay on the internal network with no
+# published ports — the SPA calls /api/... and nginx proxies to the backend by
+# service name, so nothing but :443 is reachable from outside.
+#
+# Requires, none of which are in git:
+#   .env                               secrets (see .env.example)
+#   data/trails_index.json             built index      (python -m pipeline.build_index)
+#   data/trails_geom.json              geometry sidecar
+#   data/firebase-service-account.json sign-in verification
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-backcountry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-backcountry}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-backcountry}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-backcountry}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-backcountry}
+      STORAGE_ROOT: /var/lib/backcountry/gpx
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-https://opentrails.andrewdover.com}
+      TRAILS_SOURCE: /app/data/trails.geojson
+      FIREBASE_SERVICE_ACCOUNT_PATH: /app/data/firebase-service-account.json
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      AIRNOW_API_KEY: ${AIRNOW_API_KEY:-}
+      RIDB_API_KEY: ${RIDB_API_KEY:-}
+      FIRE_HISTORY_DAYS: ${FIRE_HISTORY_DAYS:-60}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+    volumes:
+      # Read-only: the index and secrets are built/placed outside the container.
+      - ./data:/app/data:ro
+      - gpxdata:/var/lib/backcountry/gpx
+      - photocache:/app/.photo_cache
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:6767/api/health').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Empty means same-origin: the SPA calls /api/... and nginx proxies it, so
+        # no CORS and no second hostname to certificate.
+        VITE_API_BASE: ""
+        VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:?set VITE_MAPBOX_TOKEN in .env}
+        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
+        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
+        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
+        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - default
+      - public
+    labels:
+      - "traefik.enable=true"
+      # This container is on two networks, so Traefik must be told which address
+      # to route to; without it, it can pick the internal one and every request
+      # times out.
+      - "traefik.docker.network=public"
+      - "traefik.http.routers.opentrails.rule=Host(`opentrails.andrewdover.com`)"
+      - "traefik.http.routers.opentrails.entrypoints=websecure"
+      - "traefik.http.routers.opentrails.tls=true"
+      - "traefik.http.routers.opentrails.tls.certresolver=myresolver"
+      - "traefik.http.services.opentrails.loadbalancer.server.port=80"
+
+networks:
+  public:
+    external: true
+  default: {}
+
+volumes:
+  pgdata:
+  gpxdata:
+  photocache:
