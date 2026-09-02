@@ -31,6 +31,7 @@ from pathlib import Path
 
 from .elevation import elevation_for_geometry
 from .enrich_osm import CALIFORNIA_BBOX, build_poi_grid, enrich_trail, fetch_pois
+from .access import enrich_all as enrich_access
 from .gnis import fetch_features as fetch_gnis_features
 from .normalize import normalize_trails
 from .nps import fetch_trails as fetch_nps_trails
@@ -232,6 +233,18 @@ def stage_osm(trails: list[dict], bbox, step: float, verbose: bool, use_osm: boo
     return trails
 
 
+def stage_access(trails: list[dict], geometries: dict, verbose: bool) -> list[dict]:
+    """Attach trailheads, parking and water — where a hike actually starts."""
+    if verbose:
+        print("\n[4/4] access — NPS trailheads and parking")
+    try:
+        return enrich_access(trails, geometries, verbose=verbose)
+    except Exception as exc:
+        if verbose:
+            print(f"      access enrichment failed ({exc}) — continuing")
+        return trails
+
+
 def write_outputs(trails: list[dict], verbose: bool) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -290,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-elevation", action="store_true")
     parser.add_argument("--skip-nps", action="store_true")
     parser.add_argument("--skip-osm-routes", action="store_true")
+    parser.add_argument("--skip-access", action="store_true")
     parser.add_argument("--skip-osm", action="store_true")
     parser.add_argument("--with-osm", action="store_true", help="also query Overpass (slow, flaky)")
     parser.add_argument("--resume", action="store_true", help="reuse the previous build")
@@ -317,6 +331,10 @@ def main(argv: list[str] | None = None) -> int:
         trails = stage_elevation(trails, args.workers, verbose)
     if not args.skip_osm:
         trails = stage_osm(trails, CALIFORNIA_BBOX, args.osm_step, verbose, use_osm=args.with_osm)
+
+    if not args.skip_access:
+        geometries = {t["id"]: {"geometry": t.get("geometry")} for t in trails}
+        trails = stage_access(trails, geometries, verbose)
 
     write_outputs(trails, verbose)
 

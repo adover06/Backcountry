@@ -290,68 +290,115 @@ def search(
     query_text = (q or "").strip().lower()
     tokens = _tokenize(q) if q else []
 
+    # Each filter is a named predicate so facet counts can be computed with that
+    # filter's own dimension excluded. Counting facets over the fully-filtered set
+    # makes selecting one filter shrink the options for every other, so a second
+    # choice that would have matched appears unavailable. Facets must describe
+    # "what would happen if you also picked this", not "what is left".
+    def pass_length(t):
+        return _range_ok(t.get("length_miles"), length_mi)
+
+    def pass_gain(t):
+        return _range_ok(t.get("gain_ft"), gain_ft)
+
+    def pass_elevation(t):
+        return _range_ok(t.get("max_elevation_ft"), max_elevation_ft)
+
+    def pass_difficulty(t):
+        if not difficulty:
+            return True
+        rating = t.get("difficulty")
+        return bool(rating and rating["label"] in difficulty)
+
+    def pass_steepness(t):
+        if not steepness:
+            return True
+        grade = t.get("steepness")
+        return bool(grade and grade["label"] in steepness)
+
+    def pass_features(t):
+        if not features:
+            return True
+        have = t.get("features")
+        if have is None:
+            return False  # scenery not computed: unknown, not "no"
+        want = set(features)
+        return want.issubset(set(have)) if features_mode == "all" else bool(want & set(have))
+
+    def pass_route_type(t):
+        return not route_type or t.get("route_type") == route_type
+
+    def pass_month(t):
+        if not month:
+            return True
+        season = t.get("season")
+        # No recorded window means unrestricted, which is how the feed reads.
+        return not season or season.get("year_round") or month in season.get("months", [])
+
+    def pass_activity(t):
+        if not activity:
+            return True
+        state = (t.get("activities") or {}).get(activity)
+        return bool(state and state.get("allowed"))
+
+    def pass_wilderness(t):
+        return not wilderness_only or bool(t.get("mgmt_area"))
+
+    def pass_accessible(t):
+        return not accessible_only or t.get("accessibility") == "ACCESSIBLE"
+
+    predicates = {
+        "length": pass_length,
+        "gain": pass_gain,
+        "elevation": pass_elevation,
+        "difficulty": pass_difficulty,
+        "steepness": pass_steepness,
+        "features": pass_features,
+        "route_type": pass_route_type,
+        "month": pass_month,
+        "activity": pass_activity,
+        "wilderness": pass_wilderness,
+        "accessible": pass_accessible,
+    }
+
+    def in_scope(t):
+        """Viewport and text query apply to every count, including facets."""
+        if bbox and not _in_bbox(t, bbox):
+            return False
+        return True
+
+    scoped = [t for t in trails if in_scope(t)]
+
     matched = []
-    for trail in trails:
-        if bbox and not _in_bbox(trail, bbox):
+    for trail in scoped:
+        if not all(check(trail) for check in predicates.values()):
             continue
-        if not _range_ok(trail.get("length_miles"), length_mi):
-            continue
-        if not _range_ok(trail.get("gain_ft"), gain_ft):
-            continue
-        if not _range_ok(trail.get("max_elevation_ft"), max_elevation_ft):
-            continue
-
-        if difficulty:
-            rating = trail.get("difficulty")
-            if not rating or rating["label"] not in difficulty:
-                continue
-
-        if steepness:
-            grade = trail.get("steepness")
-            if not grade or grade["label"] not in steepness:
-                continue
-
-        if features:
-            trail_features = trail.get("features")
-            if trail_features is None:
-                continue  # scenery not computed: unknown, not "no"
-            have = set(trail_features)
-            want = set(features)
-            if features_mode == "all":
-                if not want.issubset(have):
-                    continue
-            elif not (want & have):
-                continue
-
-        if route_type and trail.get("route_type") != route_type:
-            continue
-
-        if month:
-            season = trail.get("season")
-            # No recorded window means unrestricted, which is how the feed reads.
-            if season and not season.get("year_round") and month not in season.get("months", []):
-                continue
-
-        if activity:
-            state = (trail.get("activities") or {}).get(activity)
-            if not state or not state.get("allowed"):
-                continue
-
-        if wilderness_only and not (trail.get("mgmt_area") or ""):
-            continue
-
-        if accessible_only and trail.get("accessibility") != "ACCESSIBLE":
-            continue
-
         if query_text:
             score = _text_score(trail, query_text, tokens)
             if score < 0:
                 continue
             trail = {**trail, "_score": score}
-
         matched.append(trail)
 
-    facets = _facets(matched)
+    def counted_for(dimension: str) -> list[dict]:
+        """Trails passing every filter except `dimension`."""
+        others = [c for name, c in predicates.items() if name != dimension]
+        subset = []
+        for trail in scoped:
+            if not all(check(trail) for check in others):
+                continue
+            if query_text and _text_score(trail, query_text, tokens) < 0:
+                continue
+            subset.append(trail)
+        return subset
+
+    facets = _facets(
+        matched,
+        difficulty_pool=counted_for("difficulty"),
+        steepness_pool=counted_for("steepness"),
+        features_pool=counted_for("features"),
+        route_pool=counted_for("route_type"),
+    )
 
     reverse = True
     if sort == "length":
@@ -385,25 +432,42 @@ def search(
     }
 
 
-def _facets(trails: list[dict]) -> dict:
-    """Counts for the filter UI, so a filter that would return nothing can be greyed."""
+def _facets(
+    trails: list[dict],
+    difficulty_pool: list[dict] | None = None,
+    steepness_pool: list[dict] | None = None,
+    features_pool: list[dict] | None = None,
+    route_pool: list[dict] | None = None,
+) -> dict:
+    """Counts for the filter UI.
+
+    Each dimension counts over a pool with its own filter removed, so a chip shows
+    how many results choosing it would give — not how many survive the choices
+    already made. Without that, picking one filter greys out every other.
+    """
     feature_counts: dict[str, int] = {}
     difficulty_counts: dict[str, int] = {}
     steepness_counts: dict[str, int] = {}
     route_counts: dict[str, int] = {}
     unknown_elevation = 0
 
-    for trail in trails:
+    for trail in features_pool if features_pool is not None else trails:
         for feature in trail.get("features") or ():
             feature_counts[feature] = feature_counts.get(feature, 0) + 1
+
+    for trail in difficulty_pool if difficulty_pool is not None else trails:
         rating = trail.get("difficulty")
         if rating:
             difficulty_counts[rating["label"]] = difficulty_counts.get(rating["label"], 0) + 1
         else:
             unknown_elevation += 1
+
+    for trail in steepness_pool if steepness_pool is not None else trails:
         grade = trail.get("steepness")
         if grade:
             steepness_counts[grade["label"]] = steepness_counts.get(grade["label"], 0) + 1
+
+    for trail in route_pool if route_pool is not None else trails:
         route = trail.get("route_type")
         if route:
             route_counts[route] = route_counts.get(route, 0) + 1
@@ -444,6 +508,7 @@ _PUBLIC_FIELDS = (
     # Present only on OSM long-distance routes.
     "source",
     "endpoints",
+    "access",
     "network",
     "website",
     "wikipedia",
