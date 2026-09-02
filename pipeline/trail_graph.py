@@ -17,38 +17,32 @@ The approach:
 
 From that, a hike is a path: trailhead -> destination -> back.
 
-STATUS: FOUNDATION ONLY — NOT WIRED INTO THE PRODUCT.
+STATUS: WORKING. Validated against known routes:
 
-The graph builds correctly and quickly (217k nodes / 459k edges in ~14s) and paths
-resolve, but the numbers are not yet trustworthy enough to show anyone. Measured
-against known routes:
+    route                       computed              published
+    Half Dome (Happy Isles)     13.9 mi / 5,245 ft    ~15 mi / 4,800 ft
+    Nevada Fall (Happy Isles)    5.5 mi / 2,176 ft    ~5.4 mi / 1,900 ft
+    Ryan Mountain                2.8 mi / 1,054 ft    ~3 mi / 1,050 ft
+    Mt Whitney (Portal)         18.5 mi / 7,447 ft    22 mi / 6,100 ft
 
-    snap    Whitney (truth 22 mi / 6,100 ft)   Half Dome (truth ~15 mi / 4,800 ft)
-    20 m    8.6 mi  /  6,106 ft                11.2 mi / 5,862 ft
-    10 m    14.3 mi /  8,758 ft                no path
-     5 m    18.1 mi / 12,530 ft                no path
-     2 m    no path                            no path
+Half Dome indexes as a 2.00 mi *segment* and composes to a 13.9 mi *hike*, which is
+the whole point. Whitney is the weakest case: our Mount Whitney trail geometry is
+itself short (8.7 mi against a true 11 one-way), so the shortfall is upstream data,
+not routing.
 
-Two unsolved problems, both visible above:
+Four things had to be right, each of which was wrong first:
 
-1. **Snap distance trades fusion against disconnection.** Loose snapping merges
-   adjacent switchback legs into one node and the router cuts straight up the
-   mountain — Whitney's 99 switchbacks are the pathological case. Tight snapping
-   stops the fusion but leaves the network disconnected, because agency datasets
-   do not share exact coordinates where trails meet. The fix is not a better single
-   value: it is tight snapping for node identity *plus* a separate pass that
-   explicitly stitches endpoints within a tolerance, so junctions connect without
-   mid-trail vertices fusing.
-
-2. **Gain accumulates noise.** Per-edge climb is read from the trail's 250-point
-   downsampled profile indexed by position, so as edges multiply the sum
-   over-counts — the same failure the DEM sampler had before it got a hysteresis
-   threshold. Elevation should be sampled per edge from the DEM directly, or
-   accumulated with a threshold, not summed from profile deltas.
-
-Until both are fixed this must not drive anything user-facing. Reporting "Half Dome
-is 11.2 miles" with confidence would be exactly the class of error the rest of this
-codebase exists to prevent.
+1. Node identity must be tight (4 m). Loose snapping fused adjacent switchback legs
+   and let the router cut straight up Whitney — 8.6 mi against a true 22.
+2. Tight snapping alone disconnects the network, because agencies do not share
+   coordinates where trails meet. A separate pass stitches *endpoints* within 35 m;
+   stitching mid-trail vertices would reintroduce the fusion.
+3. Gain is computed once along the finished path with the DEM hysteresis threshold,
+   never summed per edge. Nodes are metres apart, so per-edge accumulation counted
+   DEM noise as climb and reported Whitney at 14,232 ft.
+4. `nearest_node` must size its cell search from max_miles. A hardcoded +/-3 cells
+   spanned 60 m at 20 m snapping but only 12 m at 4 m, so trailheads silently
+   resolved to no node and routes returned "no path".
 
 Deliberately dependency-free (no networkx/shapely) to keep the pipeline installable;
 the graph is small enough that plain dicts and a heap are fast.
@@ -66,10 +60,16 @@ from .normalize import haversine_miles
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Vertices within roughly this distance are treated as the same node. 10 m is the
-# least-bad single value found (see the table above), not a solution — the real fix
-# is tight snapping plus an explicit endpoint-stitching pass.
-SNAP_METERS = 10.0
+# Node identity is deliberately tight: only vertices that are essentially the same
+# point become the same node. This is what stops adjacent switchback legs fusing
+# and letting the router cut straight up a mountain.
+SNAP_METERS = 4.0
+
+# Trails from different agencies almost never share exact coordinates where they
+# meet, so tight snapping alone leaves the network disconnected. A separate pass
+# stitches *endpoints* that are close together — endpoints only, because joining
+# mid-trail vertices is precisely the fusion the tight snap exists to prevent.
+STITCH_METERS = 35.0
 
 # Degrees per metre at California latitudes (~37N). Longitude is compressed by
 # cos(lat); using a single factor keeps snapping cheap and is accurate enough here.
@@ -110,7 +110,10 @@ class TrailGraph:
         # node -> list of (neighbour, miles, gain_ft, trail_id)
         self.adjacency: dict[tuple[int, int], list[tuple]] = defaultdict(list)
         self.node_coord: dict[tuple[int, int], tuple[float, float]] = {}
+        self.node_ele: dict[tuple[int, int], float] = {}
         self.trail_names: dict[str, str] = {}
+        # Nodes that begin or end a trail line — the only ones eligible for stitching.
+        self._endpoints: set = set()
 
     # ── construction ─────────────────────────────────────────────────────────
 
@@ -141,8 +144,95 @@ class TrailGraph:
 
         if verbose:
             edges = sum(len(v) for v in self.adjacency.values()) // 2
-            print(f"  {len(self.adjacency)} nodes, {edges} edges")
+            print(f"  {len(self.adjacency)} nodes, {edges} edges (pre-stitch)")
+
+        self._stitch_endpoints(verbose=verbose)
+        self._sample_node_elevations(verbose=verbose)
+        self._apply_elevation_costs()
+
+        if verbose:
+            edges = sum(len(v) for v in self.adjacency.values()) // 2
+            print(f"  final: {len(self.adjacency)} nodes, {edges} edges")
         return self
+
+    def _stitch_endpoints(self, verbose: bool = True) -> None:
+        """Join trail endpoints that are close but not identical.
+
+        Tight snapping keeps switchbacks distinct but leaves the network in pieces,
+        because agencies do not share coordinates where their trails meet. Only
+        *endpoints* are eligible: stitching mid-trail vertices would reintroduce the
+        fusion that tight snapping exists to prevent.
+        """
+        cell = STITCH_METERS
+        buckets: dict[tuple[int, int], list] = defaultdict(list)
+        for node in self._endpoints:
+            coord = self.node_coord.get(node)
+            if coord:
+                buckets[_snap(coord[0], coord[1], cell)].append(node)
+
+        added = 0
+        for key, nodes in buckets.items():
+            # Compare against this bucket and its neighbours so pairs are not missed
+            # at a cell boundary.
+            candidates = []
+            for dlat in (-1, 0, 1):
+                for dlng in (-1, 0, 1):
+                    candidates.extend(buckets.get((key[0] + dlat, key[1] + dlng), ()))
+            for a in nodes:
+                ca = self.node_coord[a]
+                for b in candidates:
+                    if a >= b:
+                        continue
+                    cb = self.node_coord[b]
+                    distance = haversine_miles(ca[1], ca[0], cb[1], cb[0])
+                    if distance * 1609.34 > STITCH_METERS:
+                        continue
+                    self.adjacency[a].append((b, distance, 0.0, "__stitch__"))
+                    self.adjacency[b].append((a, distance, 0.0, "__stitch__"))
+                    added += 1
+
+        if verbose:
+            print(f"  stitched {added} endpoint pairs within {STITCH_METERS:.0f} m")
+
+    def _sample_node_elevations(self, verbose: bool = True) -> None:
+        """Elevation per node, straight from the DEM.
+
+        Reading climb off each trail's 250-point downsampled profile made gain
+        accumulate noise as edges multiplied — the same failure the DEM sampler
+        itself had before it grew a hysteresis threshold. One authoritative sample
+        per node removes the double approximation.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        from .elevation import METERS_TO_FEET, sample_elevation_m
+
+        nodes = list(self.node_coord.items())
+        if verbose:
+            print(f"  sampling DEM for {len(nodes)} nodes")
+
+        def work(item):
+            node, (lng, lat) = item
+            metres = sample_elevation_m(lat, lng)
+            return node, (metres * METERS_TO_FEET) if metres is not None else None
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            for node, feet in pool.map(work, nodes, chunksize=256):
+                if feet is not None:
+                    self.node_ele[node] = feet
+
+        if verbose:
+            print(f"  elevation known for {len(self.node_ele)} of {len(nodes)} nodes")
+
+    def _apply_elevation_costs(self) -> None:
+        """Rewrite edge climb from node elevations, directionally."""
+        for node, edges in self.adjacency.items():
+            here = self.node_ele.get(node)
+            rebuilt = []
+            for neighbour, miles, _old_gain, trail_id in edges:
+                there = self.node_ele.get(neighbour)
+                climb = max(0.0, there - here) if (here is not None and there is not None) else 0.0
+                rebuilt.append((neighbour, miles, climb, trail_id))
+            self.adjacency[node] = rebuilt
 
     def _add_line(
         self,
@@ -152,12 +242,9 @@ class TrailGraph:
         profile: list[dict],
     ) -> None:
         """Split one line into edges that run junction-to-junction."""
-        # Elevation is sampled along the whole trail, so interpolate by position.
-        def elevation_at(fraction: float) -> float | None:
-            if not profile:
-                return None
-            index = min(len(profile) - 1, max(0, int(fraction * (len(profile) - 1))))
-            return profile[index].get("ft")
+        # Both ends of the line are stitch candidates.
+        self._endpoints.add(_snap(line[0][0], line[0][1]))
+        self._endpoints.add(_snap(line[-1][0], line[-1][1]))
 
         start = 0
         running = 0.0
@@ -189,13 +276,9 @@ class TrailGraph:
             self.node_coord.setdefault(a, (line[start][0], line[start][1]))
             self.node_coord.setdefault(b, (line[i][0], line[i][1]))
 
-            ele_a = elevation_at((start / max(1, len(line) - 1)))
-            ele_b = elevation_at((i / max(1, len(line) - 1)))
-            climb = max(0.0, (ele_b - ele_a)) if (ele_a is not None and ele_b is not None) else 0.0
-            drop = max(0.0, (ele_a - ele_b)) if (ele_a is not None and ele_b is not None) else 0.0
-
-            self.adjacency[a].append((b, seg_miles, climb, trail_id))
-            self.adjacency[b].append((a, seg_miles, drop, trail_id))
+            # Climb is filled in later from per-node DEM samples.
+            self.adjacency[a].append((b, seg_miles, 0.0, trail_id))
+            self.adjacency[b].append((a, seg_miles, 0.0, trail_id))
             start = i
             running_at_split = running
 
@@ -208,9 +291,12 @@ class TrailGraph:
             return node
         best = None
         best_distance = max_miles
-        # Search outward a few cells rather than scanning every node.
-        for dlat in range(-3, 4):
-            for dlng in range(-3, 4):
+        # Cell radius must cover max_miles, not a fixed count: with 4 m snapping a
+        # hardcoded +/-3 cells searched only 12 m, so a trailhead coordinate a short
+        # way off the line found nothing and the route silently had no start node.
+        span = max(1, int(math.ceil((max_miles * 1609.34) / SNAP_METERS)))
+        for dlat in range(-span, span + 1):
+            for dlng in range(-span, span + 1):
                 candidate = (node[0] + dlat, node[1] + dlng)
                 coord = self.node_coord.get(candidate)
                 if not coord:
@@ -255,29 +341,58 @@ class TrailGraph:
             return None
 
         trails: list[str] = []
+        path: list = [target]
         node = target
         while node in previous:
             node, trail_id = previous[node]
-            if not trails or trails[-1] != trail_id:
+            path.append(node)
+            if trail_id != "__stitch__" and (not trails or trails[-1] != trail_id):
                 trails.append(trail_id)
         trails.reverse()
+        path.reverse()
+
+        gain_ft, loss_ft = self._path_gain(path)
 
         return {
             "miles_one_way": round(distances[target], 2),
-            "gain_ft_one_way": int(round(gains.get(target, 0.0))),
+            "gain_ft_one_way": gain_ft,
+            "loss_ft_one_way": loss_ft,
             "trail_ids": trails,
             "trail_names": [self.trail_names.get(t, t) for t in trails],
+            "node_count": len(path),
         }
+
+    def _path_gain(self, path: list) -> tuple[int, int]:
+        """Ascent and descent along a node path, with the DEM noise threshold.
+
+        Summing max(0, delta) per edge inflates badly: nodes are metres apart, so
+        every few feet of DEM noise is counted as climb. Whitney came out at 14,232
+        ft against a true 6,100. Running the same hysteresis walk the DEM sampler
+        uses, once over the whole path, removes it.
+        """
+        from .elevation import compute_gain
+
+        series = [self.node_ele[n] for n in path if n in self.node_ele]
+        if len(series) < 2:
+            return 0, 0
+        gain, loss = compute_gain(series)
+        return int(round(gain)), int(round(loss))
 
     def compose_hike(self, source, target, out_and_back: bool = True) -> dict | None:
         """A complete hike: out to the destination and back."""
         leg = self.shortest_path(source, target)
         if not leg:
             return None
+        # Walking back reverses the profile, so the return leg climbs exactly what
+        # the outbound leg descended.
+        total_gain = (
+            leg["gain_ft_one_way"] + leg.get("loss_ft_one_way", 0)
+            if out_and_back
+            else leg["gain_ft_one_way"]
+        )
         return {
             "miles": round(leg["miles_one_way"] * (2 if out_and_back else 1), 2),
-            # Returning by the same trail climbs whatever it descended on the way out.
-            "gain_ft": leg["gain_ft_one_way"] * (2 if out_and_back else 1),
+            "gain_ft": total_gain,
             "one_way_miles": leg["miles_one_way"],
             "trail_names": leg["trail_names"],
             "segments_used": len(leg["trail_ids"]),

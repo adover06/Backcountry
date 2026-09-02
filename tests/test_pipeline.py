@@ -285,3 +285,38 @@ class TestPhotoPlaceRelevance:
         )
         assert "trail" not in tokens and "lake" not in tokens and "forest" not in tokens
         assert "eldorado" in tokens
+
+
+class TestTrailGraphGain:
+    """Gain must be computed along the path, not summed per edge."""
+
+    def test_noise_between_close_nodes_is_not_climb(self):
+        # Regression: nodes are metres apart, so per-edge max(0, delta) counted DEM
+        # noise as ascent and reported Mt Whitney at 14,232 ft against a true 6,100.
+        from pipeline.elevation import compute_gain
+
+        import random
+
+        random.seed(3)
+        flat_with_noise = [8000 + random.uniform(-4, 4) for _ in range(500)]
+        per_edge = sum(
+            max(0.0, flat_with_noise[i] - flat_with_noise[i - 1])
+            for i in range(1, len(flat_with_noise))
+        )
+        assert compute_gain(flat_with_noise)[0] == 0.0
+        assert per_edge > 400  # what per-edge summation would have reported
+
+    def test_snap_reads_the_module_global(self):
+        # Regression: SNAP_METERS was a default argument, evaluated once at
+        # definition, so tuning it produced a byte-identical graph.
+        import pipeline.trail_graph as tg
+
+        original = tg.SNAP_METERS
+        try:
+            tg.SNAP_METERS = 4.0
+            fine = tg._snap(-119.5, 37.7)
+            tg.SNAP_METERS = 400.0
+            coarse = tg._snap(-119.5, 37.7)
+            assert fine != coarse
+        finally:
+            tg.SNAP_METERS = original
