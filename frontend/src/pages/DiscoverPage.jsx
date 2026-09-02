@@ -488,6 +488,90 @@ function Lightbox({ photos, index, onClose, onIndex }) {
   );
 }
 
+const TicketIcon = (p) => (
+  <svg {...iconBase} {...p}>
+    <path d="M3 9V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 6v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-6z" />
+    <path d="M13 5v14" strokeDasharray="2 3" />
+  </svg>
+);
+
+/** Permit requirement. Placed above elevation and scenery because it is the one
+ *  fact that can make a hike impossible regardless of how good it looks. */
+function PermitNotice({ permits }) {
+  if (!permits || permits.length === 0) return null;
+
+  // A keyword match against the trail name is definite; proximity alone is not,
+  // since one coordinate stands in for a whole wilderness.
+  const confirmed = permits.filter((p) => !p.advisory);
+  const nearby = permits.filter((p) => p.advisory);
+  const lead = confirmed[0] || nearby[0];
+  const isConfirmed = Boolean(confirmed.length);
+
+  return (
+    <div
+      className={classNames(
+        "rounded-xl border px-3.5 py-3",
+        isConfirmed
+          ? "border-amber-500/45 bg-amber-500/10"
+          : "border-[var(--line)] bg-[var(--sunken)]"
+      )}
+    >
+      <div className="flex items-start gap-2.5">
+        <span className={isConfirmed ? "text-amber-500" : "text-[var(--fg-3)]"}>
+          <TicketIcon width={15} height={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p
+            className={classNames(
+              "text-sm font-semibold",
+              isConfirmed ? "text-amber-700 [:root[data-theme=dark]_&]:text-amber-300" : "text-[var(--fg)]"
+            )}
+          >
+            {isConfirmed ? "Permit required" : "Permit may be required"}
+          </p>
+
+          <p className="mt-0.5 text-xs text-[var(--fg-2)]">
+            {lead.name}
+            {lead.rec_area && lead.rec_area !== lead.name && ` · ${lead.rec_area}`}
+            {!isConfirmed && ` · ${lead.distance_mi} mi away`}
+          </p>
+
+          {lead.fee && <p className="mt-1 text-[11px] text-[var(--fg-3)]">Fee: {lead.fee}</p>}
+
+          {!isConfirmed && (
+            <p className="mt-1 text-[11px] text-[var(--fg-3)]">
+              Matched by proximity, not confirmed for this trail — check before you go.
+            </p>
+          )}
+
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            {lead.url && (
+              <a
+                href={lead.url}
+                target="_blank"
+                rel="noreferrer"
+                className={classNames(
+                  "text-xs font-medium underline",
+                  isConfirmed ? "text-amber-700 [:root[data-theme=dark]_&]:text-amber-300" : "text-[var(--accent)]"
+                )}
+              >
+                Reserve on Recreation.gov →
+              </a>
+            )}
+            {lead.phone && <span className="text-[11px] text-[var(--fg-3)]">{lead.phone}</span>}
+          </div>
+
+          {permits.length > 1 && (
+            <p className="mt-1.5 text-[11px] text-[var(--fg-3)]">
+              {permits.length - 1} other permit area{permits.length > 2 ? "s" : ""} nearby
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PhotoStrip({ trailId }) {
   const [state, setState] = useState({ loading: true, photos: [], error: null });
   const [lightbox, setLightbox] = useState(null);
@@ -1889,6 +1973,26 @@ export default function DiscoverPage() {
                   </div>
                 )}
 
+                {selected.technical && (
+                  <div className="rounded-xl border border-[var(--line)] bg-[var(--sunken)] px-3.5 py-2.5">
+                    {selected.technical.sac_label && (
+                      <p className="text-xs font-medium text-[var(--fg)]">
+                        {selected.technical.sac_label}
+                      </p>
+                    )}
+                    {selected.technical.visibility_label && (
+                      <p className="mt-0.5 text-xs text-[var(--fg-2)]">
+                        {selected.technical.visibility_label}
+                      </p>
+                    )}
+                    <p className="mt-1 text-[10px] text-[var(--fg-3)]">
+                      OpenStreetMap terrain assessment
+                    </p>
+                  </div>
+                )}
+
+                <PermitNotice permits={selected.permits} />
+
                 <ElevationProfile
                   profile={selected.elevation?.profile}
                   gain={selected.gain_ft}
@@ -1911,6 +2015,18 @@ export default function DiscoverPage() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {(selected.access || {}).trailhead && (
+                  <div className="flex items-baseline justify-between gap-3 text-xs">
+                    <span className="text-[var(--fg-3)]">Trailhead</span>
+                    <span className="text-right text-[var(--fg)]">
+                      {selected.access.trailhead.name}
+                      {selected.access.parking && (
+                        <span className="text-[var(--fg-3)]"> · parking</span>
+                      )}
+                    </span>
                   </div>
                 )}
 

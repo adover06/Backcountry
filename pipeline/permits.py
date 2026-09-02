@@ -30,8 +30,10 @@ here, check", never "you need this exact permit".
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -54,6 +56,18 @@ MATCH_RADIUS_MI = 35.0
 
 PAGE_SIZE = 50
 MAX_PAGES = 60
+
+
+def _plain(text: str | None, limit: int = 600) -> str | None:
+    """RIDB descriptions are HTML fragments; render them as readable text."""
+    if not text:
+        return None
+    text = re.sub(r"<br\s*/?>|</p>|</h\d>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    return text[:limit] or None
 
 
 class MissingKey(RuntimeError):
@@ -119,15 +133,53 @@ def fetch_permit_facilities(use_cache: bool = True, verbose: bool = True) -> lis
             if not lat or not lng:
                 continue
 
+            facility_id = str(facility.get("FacilityID"))
+
+            # FacilityReservationURL is frequently empty — it is blank for Half
+            # Dome — so fall back to the canonical Recreation.gov path, which is
+            # what a user actually needs to reach the lottery.
+            url = facility.get("FacilityReservationURL") or (
+                f"https://www.recreation.gov/permits/{facility_id}"
+                if facility_type == "Permit"
+                else f"https://www.recreation.gov/camping/campgrounds/{facility_id}"
+            )
+
+            media = [
+                {
+                    "url": m.get("URL"),
+                    "title": m.get("Title") or m.get("Description"),
+                    "credits": m.get("Credits"),
+                }
+                for m in (facility.get("MEDIA") or [])
+                if m.get("URL") and (m.get("MediaType") or "Image") == "Image"
+            ][:6]
+
+            recarea = (facility.get("RECAREA") or [{}])[0]
+            org = (facility.get("ORGANIZATION") or [{}])[0]
+
             records.append(
                 {
-                    "id": str(facility.get("FacilityID")),
+                    "id": facility_id,
                     "name": name,
                     "type": facility_type,
                     "reservable": bool(facility.get("Reservable")),
-                    "url": facility.get("FacilityReservationURL"),
-                    "phone": facility.get("FacilityPhone"),
-                    "description": (facility.get("FacilityDescription") or "")[:400],
+                    "url": url,
+                    "phone": facility.get("FacilityPhone") or None,
+                    "email": facility.get("FacilityEmail") or None,
+                    "description": _plain(facility.get("FacilityDescription")),
+                    "directions": _plain(facility.get("FacilityDirections"), 400),
+                    "fee": _plain(facility.get("FacilityUseFeeDescription"), 300),
+                    # "Half Dome,Half Dome Trail,The Cables,Yose,Yosemite" — a much
+                    # better matching signal than coordinates alone.
+                    "keywords": [
+                        k.strip()
+                        for k in (facility.get("Keywords") or "").split(",")
+                        if k.strip()
+                    ],
+                    "media": media,
+                    "rec_area": recarea.get("RecAreaName"),
+                    "org": org.get("OrgAbbrevName"),
+                    "ada": facility.get("FacilityAdaAccess") == "Y",
                     "lat": float(lat),
                     "lng": float(lng),
                     "is_permit": facility_type == "Permit",
@@ -188,13 +240,32 @@ def enrich_trail(trail: dict, grid: PointGrid, geometry: dict | None, stride: in
             "url": p.get("url"),
             "distance_mi": p["distance_mi"],
             "reservable": p.get("reservable"),
-            # A single coordinate stands in for a whole wilderness, so this is a
-            # prompt to check rather than a statement that the permit applies.
-            "advisory": True,
+            "description": p.get("description"),
+            "fee": p.get("fee"),
+            "phone": p.get("phone"),
+            "rec_area": p.get("rec_area"),
+            "org": p.get("org"),
+            "media": p.get("media"),
+            # A single coordinate stands in for a whole wilderness, so a proximity
+            # match is a prompt to check, not a statement that the permit applies.
+            # Keyword agreement with the trail name is much stronger evidence.
+            "advisory": not _keyword_match(trail, p),
         }
         for p in permits
     ]
     return trail
+
+
+def _keyword_match(trail: dict, permit: dict) -> bool:
+    """True when the permit's own keywords name this trail.
+
+    Half Dome Permits lists "Half Dome, Half Dome Trail, The Cables". When that
+    lines up with the trail name the match is definite rather than advisory.
+    """
+    name = (trail.get("name") or "").lower()
+    if not name:
+        return False
+    return any(k.lower() in name or name in k.lower() for k in (permit.get("keywords") or []) if len(k) > 4)
 
 
 def enrich_all(trails: list[dict], geometries: dict, verbose: bool = True) -> list[dict]:
