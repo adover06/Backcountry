@@ -1122,6 +1122,8 @@ export default function DiscoverPage() {
             type: "raster-dem",
             url: "mapbox://mapbox.mapbox-terrain-dem-v1",
             tileSize: 512,
+            // 14 is the DEM's native maximum; going higher just upsamples, but
+            // asking for it lets Mapbox use the finest tiles available when tilted.
             maxzoom: 14,
           });
         }
@@ -1129,25 +1131,107 @@ export default function DiscoverPage() {
         // carry the shape.
         map.current.setTerrain({
           source: "mapbox-dem",
-          exaggeration: basemap === "satellite" ? 1.35 : 1.15,
+          exaggeration: basemap === "satellite" ? 1.5 : 1.25,
         });
 
-        if (basemap !== "satellite" && !map.current.getLayer("hillshade")) {
-          // Under the trail lines, over the basemap fills.
+        if (!map.current.getLayer("hillshade")) {
+          // Kept under satellite too: the imagery shows texture but flattens relief
+          // at low sun angles, and the shading is what makes shape readable.
           map.current.addLayer(
             {
               id: "hillshade",
               type: "hillshade",
               source: "mapbox-dem",
               paint: {
-                "hillshade-exaggeration": isDark ? 0.45 : 0.3,
-                "hillshade-shadow-color": isDark ? "#000000" : "#5b6b5f",
-                "hillshade-highlight-color": isDark ? "#3a4a44" : "#ffffff",
-                "hillshade-accent-color": isDark ? "#0e1a16" : "#8ba394",
+                // Dark needs far more separation than it was getting: a #3a4a44
+                // highlight on a near-black ground is invisible, which is why the
+                // dark terrain view lost all sense of depth.
+                "hillshade-exaggeration": isDark ? 0.75 : 0.45,
+                "hillshade-shadow-color": isDark ? "#000000" : "#4a5a52",
+                "hillshade-highlight-color": isDark ? "#8fa8a0" : "#ffffff",
+                "hillshade-accent-color": isDark ? "#1d2b2e" : "#7d9689",
               },
             },
             "trails-hit"
           );
+        }
+
+        // Contour lines, drawn ourselves rather than relying on the basemap.
+        // outdoors-v12 has them; dark-v11 and satellite do not, so switching theme
+        // or basemap silently removed every elevation cue. Sourcing them directly
+        // means contours are present on all three.
+        if (!map.current.getSource("mapbox-terrain")) {
+          map.current.addSource("mapbox-terrain", {
+            type: "vector",
+            url: "mapbox://mapbox.mapbox-terrain-v2",
+          });
+        }
+        if (!map.current.getLayer("contours")) {
+          map.current.addLayer(
+            {
+              id: "contours",
+              type: "line",
+              source: "mapbox-terrain",
+              "source-layer": "contour",
+              minzoom: 10,
+              paint: {
+                "line-color": isDark ? "#7fe3cf" : "#8a6a3a",
+                // Index contours (every 5th) are drawn heavier, as on a paper map.
+                "line-width": [
+                  "case",
+                  ["==", ["get", "index"], 5], 1.1,
+                  ["==", ["get", "index"], 10], 1.1,
+                  0.55,
+                ],
+                "line-opacity": [
+                  "interpolate", ["linear"], ["zoom"],
+                  10, 0,
+                  12, isDark ? 0.3 : 0.35,
+                  15, isDark ? 0.45 : 0.5,
+                ],
+              },
+            },
+            "trails-hit"
+          );
+        }
+        if (!map.current.getLayer("contour-labels")) {
+          map.current.addLayer(
+            {
+              id: "contour-labels",
+              type: "symbol",
+              source: "mapbox-terrain",
+              "source-layer": "contour",
+              minzoom: 12.5,
+              filter: [">", ["get", "index"], 0],
+              layout: {
+                "symbol-placement": "line",
+                "text-field": ["concat", ["to-string", ["get", "ele"]], " m"],
+                "text-size": 10,
+                "text-max-angle": 25,
+                "symbol-spacing": 320,
+              },
+              paint: {
+                "text-color": isDark ? "#9fe8d8" : "#7a5c2e",
+                "text-halo-color": isDark ? "#000000" : "#ffffff",
+                "text-halo-width": 1.2,
+              },
+            },
+            "trails-hit"
+          );
+        }
+
+        // Sky adds the horizon and atmospheric depth that sells a tilted view.
+        if (!map.current.getLayer("sky")) {
+          map.current.addLayer({
+            id: "sky",
+            type: "sky",
+            paint: {
+              "sky-type": "atmosphere",
+              "sky-atmosphere-sun": [0.0, 88.0],
+              "sky-atmosphere-sun-intensity": isDark ? 4 : 12,
+              "sky-atmosphere-color": isDark ? "#0a1418" : "#a8c8e8",
+            },
+          });
         }
 
         map.current.setFog(
