@@ -509,6 +509,8 @@ _PUBLIC_FIELDS = (
     "source",
     "endpoints",
     "access",
+    "technical",
+    "permits",
     "network",
     "website",
     "wikipedia",

@@ -32,6 +32,9 @@ from pathlib import Path
 from .elevation import elevation_for_geometry
 from .enrich_osm import CALIFORNIA_BBOX, build_poi_grid, enrich_trail, fetch_pois
 from .access import enrich_all as enrich_access
+from .permits import MissingKey as PermitsMissingKey
+from .permits import enrich_all as enrich_permits
+from .technical import enrich_all as enrich_technical
 from .gnis import fetch_features as fetch_gnis_features
 from .normalize import normalize_trails
 from .nps import fetch_trails as fetch_nps_trails
@@ -245,6 +248,46 @@ def stage_access(trails: list[dict], geometries: dict, verbose: bool) -> list[di
         return trails
 
 
+def stage_technical(trails: list[dict], geometries: dict, verbose: bool) -> list[dict]:
+    """Flag alpine terrain and poor tread from OSM sac_scale / trail_visibility.
+
+    Coverage is ~0.3-0.5% of hikeable ways, so these are badges, never facets. But
+    the coverage is not random: mappers tag it where a trail stops being a walk.
+    """
+    if verbose:
+        print("\n[5/5] technical — OSM sac_scale / trail_visibility flags")
+    try:
+        return enrich_technical(trails, geometries, verbose=verbose)
+    except FileNotFoundError as exc:
+        if verbose:
+            print(f"      skipped: {exc}")
+        return trails
+    except Exception as exc:
+        if verbose:
+            print(f"      failed ({exc}) — continuing")
+        return trails
+
+
+def stage_permits(trails: list[dict], geometries: dict, verbose: bool) -> list[dict]:
+    """Attach nearby permit desks from Recreation.gov.
+
+    Optional: skipped cleanly without RIDB_API_KEY, since it is the only stage that
+    needs a credential.
+    """
+    if verbose:
+        print("\n[6/6] permits — Recreation.gov (RIDB)")
+    try:
+        return enrich_permits(trails, geometries, verbose=verbose)
+    except PermitsMissingKey as exc:
+        if verbose:
+            print(f"      skipped: {exc}")
+        return trails
+    except Exception as exc:
+        if verbose:
+            print(f"      failed ({exc}) — continuing")
+        return trails
+
+
 def write_outputs(trails: list[dict], verbose: bool) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -304,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-nps", action="store_true")
     parser.add_argument("--skip-osm-routes", action="store_true")
     parser.add_argument("--skip-access", action="store_true")
+    parser.add_argument("--skip-technical", action="store_true")
+    parser.add_argument("--skip-permits", action="store_true")
     parser.add_argument("--skip-osm", action="store_true")
     parser.add_argument("--with-osm", action="store_true", help="also query Overpass (slow, flaky)")
     parser.add_argument("--resume", action="store_true", help="reuse the previous build")
@@ -335,6 +380,14 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_access:
         geometries = {t["id"]: {"geometry": t.get("geometry")} for t in trails}
         trails = stage_access(trails, geometries, verbose)
+
+    if not args.skip_technical:
+        geometries = {t["id"]: {"geometry": t.get("geometry")} for t in trails}
+        trails = stage_technical(trails, geometries, verbose)
+
+    if not args.skip_permits:
+        geometries = {t["id"]: {"geometry": t.get("geometry")} for t in trails}
+        trails = stage_permits(trails, geometries, verbose)
 
     write_outputs(trails, verbose)
 
