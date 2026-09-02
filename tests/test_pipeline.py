@@ -81,9 +81,15 @@ class TestNormalizeValues:
     @pytest.mark.parametrize(
         "raw,expected",
         [
-            ("NATIVE MATERIAL", "Native Material"),
-            ("NAT - NATIVE MATERIAL", "Native Material"),
-            ("AC- ASPHALT", "Asphalt"),
+            # Dual encoding and synonyms both collapse: the feed spells the same
+            # surface as "NATIVE MATERIAL", "NAT - NATIVE MATERIAL" and "EARTH",
+            # which listed as three separate facet options.
+            ("NATIVE MATERIAL", "Native"),
+            ("NAT - NATIVE MATERIAL", "Native"),
+            ("EARTH", "Native"),
+            ("AC- ASPHALT", "Paved"),
+            ("CONCRETE", "Paved"),
+            ("CRUSHED AGGREGATE OR GRAVEL", "Gravel"),
             ("N/A", None),
         ],
     )

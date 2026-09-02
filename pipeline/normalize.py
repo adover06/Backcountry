@@ -69,14 +69,34 @@ def normalize_grade(raw: Any) -> dict | None:
     return {"min_pct": low, "max_pct": high, "label": f"{low}-{high}%"}
 
 
+# The feed spells the same surface several ways. Collapsing them keeps the facet
+# from listing "Native Material", "Native" and "Earth" as three separate options.
+_SURFACE_ALIASES = {
+    "native material": "Native",
+    "native": "Native",
+    "earth": "Native",
+    "soil": "Native",
+    "dirt": "Native",
+    "imported compacted material": "Compacted gravel",
+    "crushed aggregate or gravel": "Gravel",
+    "imported loose material": "Gravel",
+    "gravel": "Gravel",
+    "asphalt": "Paved",
+    "concrete": "Paved",
+    "snow": "Snow",
+}
+
+
 def normalize_surface(raw: Any) -> str | None:
-    """Strip the 'NAT - ' style code prefix and title-case the surface name."""
+    """Strip the 'NAT - ' style code prefix and collapse duplicate spellings."""
     text = _clean(raw)
     if not text:
         return None
     # "NAT - NATIVE MATERIAL" and "AC- ASPHALT" both carry a leading code.
     text = re.sub(r"^[A-Z]{1,4}\s*-\s*", "", text).strip()
-    return text.title() if text else None
+    if not text:
+        return None
+    return _SURFACE_ALIASES.get(text.lower(), text.title())
 
 
 def normalize_mgmt_area(raw: Any) -> str | None:
