@@ -41,6 +41,11 @@ const DEFAULT_FILTERS = {
   features: [],
   featuresMode: "any",
   routeType: "",
+  wildernessArea: "",
+  // Defaults to hiking: this is a hiking and backpacking app, and without it a
+  // search for a hike returns jeep roads. Visible as a selected chip, one click
+  // to clear, so nothing is filtered silently.
+  activity: "hiking",
   month: "",
   sort: "relevance",
 };
@@ -71,6 +76,8 @@ function readUrlState() {
       features: list("feat"),
       featuresMode: p.get("fmode") === "all" ? "all" : "any",
       routeType: p.get("rt") || "",
+      wildernessArea: p.get("wa") || "",
+      activity: p.has("act") ? p.get("act") : "hiking",
       month: p.get("mo") || "",
       sort: p.get("sort") || "relevance",
     },
@@ -94,6 +101,8 @@ function writeUrlState({ filters, selectedId, map, basemap, pitched }) {
     if (filters.featuresMode === "all") p.set("fmode", "all");
   }
   if (filters.routeType) p.set("rt", filters.routeType);
+  if (filters.wildernessArea) p.set("wa", filters.wildernessArea);
+  if (filters.activity !== "hiking") p.set("act", filters.activity);
   if (filters.month) p.set("mo", String(filters.month));
   if (filters.sort && filters.sort !== "relevance") p.set("sort", filters.sort);
   if (basemap && basemap !== "terrain") p.set("map", basemap);
@@ -139,6 +148,17 @@ function initialTheme() {
 
 // Read from CSS so light and dark share one source of truth and the map lines
 // always match the chips. Re-read whenever the theme flips.
+// Activity is partly published and partly derived, so each chip says what it means.
+// "Hiking" is not "hiking is permitted" — that is true of every trail carrying use
+// data — it is "no motors allowed", which is what separates a trail from a road.
+const ACTIVITIES = [
+  ["hiking", "Hiking", "Foot trails — excludes routes open to 4WD, ATV or motorcycles"],
+  ["backpacking", "Backpacking", "In designated wilderness, or 8+ miles — derived, not a published field"],
+  ["bike", "Biking", "Bikes permitted (USFS allowed-use)"],
+  ["horse", "Horse", "Horses permitted (USFS allowed-use)"],
+  ["motorized", "Motorized", "Jeep, ATV and OHV routes — hidden from the other categories"],
+];
+
 const DIFFICULTY_VARS = {
   easy: "--d-easy",
   moderate: "--d-moderate",
@@ -189,7 +209,34 @@ const FEATURE_LABELS = {
   cave: "Cave",
   arch: "Arch",
   glacier: "Glacier",
+  // GNIS landform classes. These are already in the index and were rendering as
+  // raw slugs ("hot_spring" reads fine, "pillar" does not).
+  pass: "Pass",
+  ridge: "Ridge",
+  basin: "Basin",
+  island: "Island",
+  beach: "Beach",
+  bay: "Bay",
+  pillar: "Rock pillar",
+  cliff: "Cliff",
+  marsh: "Marsh",
 };
+
+// Access facilities worth a row in the detail panel, most trip-changing first.
+// `trailhead` is rendered separately above, since it is the one everybody needs.
+const ACCESS_ROWS = [
+  ["water", "Drinking water"],
+  ["campground", "Campground"],
+  ["backcountry_camp", "Backcountry camping"],
+  ["shelter", "Shelter"],
+  ["visitor_center", "Visitor center"],
+];
+
+// Below this zoom the map draws one dot per trail instead of full lines. Measured
+// against the live API on a dense Sierra viewport: lines are 7,901,299 bytes in
+// 5.47s, dots are 73,453 bytes in 0.021s — 108x smaller and 260x faster. Lines only
+// become worth their cost once you are zoomed in far enough to read trail shape.
+const DOT_ZOOM_MAX = 11;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -300,6 +347,8 @@ function buildParams(filters, bbox) {
     params.set("features_mode", filters.featuresMode);
   }
   if (filters.routeType) params.set("route_type", filters.routeType);
+  if (filters.wildernessArea) params.set("wilderness_area", filters.wildernessArea);
+  if (filters.activity) params.set("activity", filters.activity);
   if (filters.month) params.set("month", String(filters.month));
   if (filters.sort) params.set("sort", filters.sort);
   return params;
@@ -597,6 +646,122 @@ const TicketIcon = (p) => (
     <path d="M13 5v14" strokeDasharray="2 3" />
   </svg>
 );
+
+const TreeIcon = (p) => (
+  <svg {...iconBase} {...p}>
+    <path d="M12 3 6.5 12h3L5 19h14l-4.5-7h3z" />
+    <path d="M12 19v2" />
+  </svg>
+);
+
+/** What a dot is, shown at the cursor.
+
+ *  Everything here comes from the dot's own properties, so it renders on the first
+ *  mousemove with no request. The trail line arrives a moment later from a separate
+ *  fetch; the card does not wait for it. */
+function DotHoverCard({ card }) {
+  if (!card) return null;
+
+  // Flip to the other side of the cursor near the right/bottom edge so the card is
+  // never clipped by the map container.
+  const flipX = card.x > window.innerWidth - 260;
+  const flipY = card.y > window.innerHeight - 160;
+
+  return (
+    <div
+      className="pointer-events-none absolute z-20 hidden w-[228px] rounded-xl border border-[var(--line)] bg-[var(--panel)]/95 px-3 py-2.5 shadow-xl backdrop-blur sm:block"
+      style={{
+        left: flipX ? card.x - 240 : card.x + 14,
+        top: flipY ? card.y - 130 : card.y + 14,
+      }}
+    >
+      <p className="text-[13px] font-semibold leading-snug text-[var(--fg)]">
+        {card.name || "Unnamed trail"}
+      </p>
+      <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] text-[var(--fg-2)]">
+        {card.length_miles != null && (
+          <span>
+            <span className="text-[var(--fg)] font-medium">{card.length_miles}</span> mi
+          </span>
+        )}
+        {card.gain_ft != null && (
+          <span>
+            <span className="text-[var(--fg)] font-medium">
+              {Math.round(card.gain_ft).toLocaleString()}
+            </span>{" "}
+            ft gain
+          </span>
+        )}
+      </div>
+      <div className="mt-1.5 flex items-center gap-2">
+        {card.difficulty && (() => {
+          // The CSS variable rather than the JS palette: this component sits
+          // outside the page's state, and a var tracks the theme on its own.
+          const ink = `var(${
+            DIFFICULTY_VARS[String(card.difficulty).toLowerCase()] || "--d-unknown"
+          })`;
+          return (
+            <span
+              className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+              style={{
+                background: `color-mix(in srgb, ${ink} 22%, transparent)`,
+                color: ink,
+              }}
+            >
+              {card.difficulty}
+            </span>
+          );
+        })()}
+        <span className="text-[10px] text-[var(--fg-3)]">
+          {card.marker_kind === "trailhead" ? "at trailhead" : "approx. location"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Designated wilderness. Land status rather than proximity, so it states the
+ *  designation outright — and it changes the rules of the trip, not just the view. */
+function WildernessNotice({ wilderness }) {
+  if (!wilderness || !wilderness.name) return null;
+
+  // Containment is exact, unlike the 35 mi proximity join behind PermitNotice, so
+  // this states the designation outright. A trail that only clips a boundary is
+  // reported as partly inside rather than being claimed for the area.
+  const partial = wilderness.fully_inside === false;
+  const permit = wilderness.permit;
+
+  return (
+    <div className="rounded-xl border border-emerald-600/40 bg-emerald-500/10 px-3.5 py-3">
+      <div className="flex items-start gap-2.5">
+        <span className="text-emerald-600 [:root[data-theme=dark]_&]:text-emerald-400">
+          <TreeIcon width={15} height={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-emerald-800 [:root[data-theme=dark]_&]:text-emerald-300">
+            {wilderness.name}
+          </p>
+          <p className="mt-0.5 text-xs text-[var(--fg-2)]">
+            {partial
+              ? `Designated wilderness · trail is partly inside (${Math.round(
+                  (wilderness.inside_fraction || 0) * 100
+                )}%)`
+              : "Designated wilderness"}
+          </p>
+          <p className="mt-1 text-[10px] leading-relaxed text-[var(--fg-3)]">
+            No bicycles or motorised transport. Group size limits and overnight
+            permits usually apply — check with the managing agency.
+          </p>
+          {permit && (
+            <p className="mt-1 text-[11px] text-[var(--fg-2)]">
+              Permits: {permit.name}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Permit requirement. Placed above elevation and scenery because it is the one
  *  fact that can make a hike impossible regardless of how good it looks. */
@@ -1020,6 +1185,28 @@ export default function DiscoverPage() {
 
   const [mapReady, setMapReady] = useState(false);
   const [bbox, setBbox] = useState(null);
+  // Mode, not raw zoom: re-rendering on every fractional zoom would refetch
+  // constantly, and only the crossing of the threshold changes what we request.
+  const [dotMode, setDotMode] = useState(true);
+  const [hoverTrailId, setHoverTrailId] = useState(null);
+  const [hoverCard, setHoverCard] = useState(null);
+  const [dotCount, setDotCount] = useState(0);
+  // Route planning. `planModeRef` mirrors the state because the map click handler
+  // is registered once and would otherwise close over the initial value forever.
+  const [planMode, setPlanMode] = useState(false);
+  const [planStart, setPlanStart] = useState(null);
+  const [planEnd, setPlanEnd] = useState(null);
+  const [planOutAndBack, setPlanOutAndBack] = useState(true);
+  const [planRoute, setPlanRoute] = useState(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState(null);
+  const planModeRef = useRef(false);
+  useEffect(() => {
+    planModeRef.current = planMode;
+    if (map.current) {
+      map.current.getCanvas().style.cursor = planMode ? "crosshair" : "";
+    }
+  }, [planMode]);
   const [results, setResults] = useState([]);
   const [total, setTotal] = useState(0);
   const [facets, setFacets] = useState(null);
@@ -1162,6 +1349,16 @@ export default function DiscoverPage() {
       const isDark = document.documentElement.getAttribute("data-theme") === "dark";
       const routeInk = isDark ? "#f8fafc" : "#0f172a";
       const routeInkContrast = isDark ? "#0b1015" : "#ffffff";
+      // Clusters are counts, not trails, so they take a neutral accent rather than
+      // any difficulty colour — colouring them would imply a difficulty they do
+      // not have.
+      const planInk = isDark ? "#67d0ff" : "#0b70b8";
+      const clusterInk = isDark ? "#5fbf8c" : "#3aa568";
+      const clusterInkLow = isDark ? "#31694f" : "#9fd9ba";
+      const clusterInkHigh = isDark ? "#8ee6b4" : "#1d7a45";
+      const clusterText = isDark ? "#eafff3" : "#062514";
+      const labelInk = isDark ? "#e8f2ec" : "#12261b";
+      const labelHalo = isDark ? "rgba(6,14,10,0.85)" : "rgba(255,255,255,0.9)";
       try {
       map.current.addSource("trails", {
         type: "geojson",
@@ -1200,6 +1397,181 @@ export default function DiscoverPage() {
         layout: { "line-cap": "round", "line-join": "round" },
         filter: ["==", ["get", "id"], "__none__"],
         paint: { "line-color": routeInk, "line-width": 5, "line-opacity": 1 },
+      });
+
+      // One point per trail, clustered. A thousand identical dots is not
+      // information — a cluster labelled "240" is, and it collapses a wall of
+      // overlapping marks into something you can read at a glance.
+      map.current.addSource("trail-dots", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+        cluster: true,
+        clusterRadius: 40,
+        // Above this, show individual trails: by then they are far enough apart to
+        // be distinct and you are close enough to care which is which.
+        clusterMaxZoom: 10,
+        clusterProperties: {
+          // Carried so a cluster can say something about what is inside it.
+          longest: ["max", ["coalesce", ["get", "length_miles"], 0]],
+        },
+      });
+
+      map.current.addLayer({
+        id: "trail-dots-cluster",
+        type: "circle",
+        source: "trail-dots",
+        maxzoom: DOT_ZOOM_MAX,
+        filter: ["has", "point_count"],
+        paint: {
+          // Density reads through value, not size alone: a sparse cluster stays
+          // translucent and lets the terrain through, a dense one darkens.
+          "circle-color": [
+            "interpolate", ["linear"], ["get", "point_count"],
+            1, clusterInkLow, 100, clusterInk, 800, clusterInkHigh,
+          ],
+          "circle-opacity": 0.62,
+          // Area, not radius, tracks count — doubling the radius quadruples the
+          // apparent size and badly overstates a small difference. Kept small on
+          // purpose: these sat on top of the map and buried the hillshade.
+          "circle-radius": [
+            "interpolate", ["linear"], ["sqrt", ["get", "point_count"]],
+            1, 9, 4, 14, 10, 19, 30, 26,
+          ],
+          "circle-stroke-width": 1,
+          "circle-stroke-color": "rgba(255,255,255,0.28)",
+        },
+      });
+
+      map.current.addLayer({
+        id: "trail-dots-cluster-count",
+        type: "symbol",
+        source: "trail-dots",
+        maxzoom: DOT_ZOOM_MAX,
+        filter: ["has", "point_count"],
+        layout: {
+          "text-field": ["get", "point_count_abbreviated"],
+          "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+          "text-size": ["interpolate", ["linear"], ["get", "point_count"], 1, 11, 500, 15],
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": clusterText,
+          "text-halo-color": labelHalo,
+          "text-halo-width": 1,
+        },
+      });
+
+      map.current.addLayer({
+        id: "trail-dots-point",
+        type: "circle",
+        source: "trail-dots",
+        maxzoom: DOT_ZOOM_MAX,
+        filter: ["!", ["has", "point_count"]],
+        paint: {
+          "circle-color": difficultyColorExpression(readPalette()),
+          // Size carries trail length, so scanning the map tells you where the
+          // long days are without reading a single label.
+          "circle-radius": [
+            "interpolate", ["linear"], ["coalesce", ["get", "length_miles"], 0],
+            0, 3.5, 3, 5, 10, 7, 30, 10,
+          ],
+          // A surveyed trailhead is a stronger claim than a computed midpoint, and
+          // the ring says which one you are looking at.
+          "circle-stroke-width": [
+            "case", ["==", ["get", "marker_kind"], "trailhead"], 2.5, 1,
+          ],
+          "circle-stroke-color": [
+            "case",
+            ["==", ["get", "marker_kind"], "trailhead"], "rgba(255,255,255,0.9)",
+            "rgba(0,0,0,0.55)",
+          ],
+          "circle-opacity": 0.95,
+        },
+      });
+
+      map.current.addLayer({
+        id: "trail-dots-label",
+        type: "symbol",
+        source: "trail-dots",
+        filter: ["!", ["has", "point_count"]],
+        minzoom: 9.5,
+        maxzoom: DOT_ZOOM_MAX,
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+          "text-size": 11,
+          "text-offset": [0, 1.1],
+          "text-anchor": "top",
+          "text-optional": true,
+          "text-max-width": 11,
+        },
+        paint: {
+          "text-color": labelInk,
+          "text-halo-color": labelHalo,
+          "text-halo-width": 1.4,
+        },
+      });
+
+      // The line revealed under the cursor. Separate from `selected-route` so a
+      // hover never disturbs what the user has actually selected.
+      map.current.addSource("hover-route", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+
+      map.current.addLayer({
+        id: "hover-route-line",
+        type: "line",
+        source: "hover-route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": routeInk, "line-width": 4, "line-opacity": 0.95 },
+      });
+
+      // Composed hike from the routing graph.
+      map.current.addSource("plan-route", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.current.addLayer({
+        id: "plan-route-casing",
+        type: "line",
+        source: "plan-route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": routeInkContrast, "line-width": 9, "line-opacity": 0.9 },
+      });
+      map.current.addLayer({
+        id: "plan-route-line",
+        type: "line",
+        source: "plan-route",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": planInk, "line-width": 5 },
+      });
+
+      map.current.addSource("plan-points", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.current.addLayer({
+        id: "plan-points-circle",
+        type: "circle",
+        source: "plan-points",
+        paint: {
+          "circle-radius": 7,
+          "circle-color": ["case", ["==", ["get", "role"], "start"], planInk, routeInk],
+          "circle-stroke-width": 2.5,
+          "circle-stroke-color": routeInkContrast,
+        },
+      });
+      map.current.addLayer({
+        id: "plan-points-label",
+        type: "symbol",
+        source: "plan-points",
+        layout: {
+          "text-field": ["case", ["==", ["get", "role"], "start"], "A", "B"],
+          "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+          "text-size": 10,
+        },
+        paint: { "text-color": routeInkContrast },
       });
 
       // Selected route drawn on top of everything else.
@@ -1272,8 +1644,80 @@ export default function DiscoverPage() {
         setHovered(null);
       });
       map.current.on("click", "trails-hit", (e) => {
+        if (planModeRef.current) return;   // the click is placing a route point
         const id = e.features?.[0]?.properties?.id;
         if (id) loadTrail(id);
+      });
+
+      map.current.on("mousemove", "trail-dots-point", (e) => {
+        map.current.getCanvas().style.cursor = "pointer";
+        const f = e.features?.[0];
+        const id = f?.properties?.id;
+        if (id == null) return;
+        // Card position follows the cursor; the payload is what the dot already
+        // carries, so the card appears instantly and does not wait on a fetch.
+        setHoverCard({
+          x: e.point.x,
+          y: e.point.y,
+          name: f.properties.name,
+          length_miles: f.properties.length_miles,
+          gain_ft: f.properties.gain_ft,
+          difficulty: f.properties.difficulty,
+          marker_kind: f.properties.marker_kind,
+        });
+        if (id !== hoveredRef.current) {
+          setHovered(String(id));
+          setHoverTrailId(String(id));
+        }
+      });
+      map.current.on("mouseleave", "trail-dots-point", () => {
+        map.current.getCanvas().style.cursor = "";
+        setHovered(null);
+        setHoverTrailId(null);
+        setHoverCard(null);
+      });
+      map.current.on("click", "trail-dots-point", (e) => {
+        if (planModeRef.current) return;
+        const id = e.features?.[0]?.properties?.id;
+        if (id) loadTrail(id);
+      });
+
+      // Clicking a cluster zooms to the level where it breaks apart, which is the
+      // only useful thing a cluster can do.
+      map.current.on("click", "trail-dots-cluster", (e) => {
+        const feature = e.features?.[0];
+        const clusterId = feature?.properties?.cluster_id;
+        const source = map.current.getSource("trail-dots");
+        if (clusterId == null || !source?.getClusterExpansionZoom) return;
+        source.getClusterExpansionZoom(clusterId, (err, zoom) => {
+          if (err) return;
+          map.current.easeTo({
+            center: feature.geometry.coordinates,
+            zoom: Math.min(zoom + 0.4, 16),
+            duration: 500,
+          });
+        });
+      });
+      map.current.on("mouseenter", "trail-dots-cluster", () => {
+        map.current.getCanvas().style.cursor = "pointer";
+      });
+      map.current.on("mouseleave", "trail-dots-cluster", () => {
+        map.current.getCanvas().style.cursor = "";
+      });
+
+      // Placing route points. Registered on the map rather than a layer, because
+      // you pick a spot on the ground, not a feature.
+      map.current.on("click", (e) => {
+        if (!planModeRef.current) return;
+        const point = [
+          Number(e.lngLat.lng.toFixed(6)),
+          Number(e.lngLat.lat.toFixed(6)),
+        ];
+        setPlanStart((currentStart) => {
+          if (!currentStart) return point;
+          setPlanEnd(point);
+          return currentStart;
+        });
       });
 
       const sync = () => {
@@ -1288,6 +1732,7 @@ export default function DiscoverPage() {
         setBbox((current) =>
           current && current.every((v, i) => v === next[i]) ? current : next
         );
+        setDotMode(map.current.getZoom() < DOT_ZOOM_MAX);
       };
       // Terrain relief. For choosing a route, seeing where the mountains actually
       // are matters more than any styling — and it is what makes a dark basemap
@@ -1535,15 +1980,38 @@ export default function DiscoverPage() {
   // Move the scrub marker as the profile cursor moves.
   const selectedCoords = useMemo(() => flattenGeometry(selected?.geometry), [selected]);
 
+  // The elevation axis and the drawn line measure the same walk differently. The
+  // profile is sampled at one point per 0.05 mi, and a chord through those samples
+  // is shorter than the arc through every vertex — measured across the index, the
+  // profile ends at a median 94.4% of the drawn length, and 54.7% of trails are
+  // more than 5% short. Scrubbing to the far right therefore stopped short of the
+  // end of the trail. Both are monotonic along the same path, so mapping *fraction
+  // of the profile* onto *fraction of the drawn line* lines the two ends up and
+  // stays correct in between.
+  const scrubScale = useMemo(() => {
+    const profile = selected?.elevation?.profile;
+    if (!profile?.length || selectedCoords.length < 2) return null;
+    const profileMi = profile.reduce((max, p) => Math.max(max, p?.mi ?? 0), 0);
+    if (profileMi <= 0) return null;
+    let drawnMi = 0;
+    for (let i = 1; i < selectedCoords.length; i += 1) {
+      drawnMi += haversineMi(selectedCoords[i - 1], selectedCoords[i]);
+    }
+    return drawnMi > 0 ? { profileMi, drawnMi } : null;
+  }, [selected, selectedCoords]);
+
   const handleScrub = useCallback(
     (mi) => {
       if (mi == null) {
         setScrubPoint(null);
         return;
       }
-      setScrubPoint(pointAtMile(selectedCoords, mi));
+      const target = scrubScale
+        ? (mi / scrubScale.profileMi) * scrubScale.drawnMi
+        : mi;
+      setScrubPoint(pointAtMile(selectedCoords, target));
     },
-    [selectedCoords]
+    [selectedCoords, scrubScale]
   );
 
   useEffect(() => {
@@ -1555,6 +2023,166 @@ export default function DiscoverPage() {
         : { type: "FeatureCollection", features: [] }
     );
   }, [scrubPoint]);
+
+  // ── Reveal a trail's line when its dot is hovered ───────────────────────────
+  // Geometry is fetched per trail rather than shipped with the dots: one line is a
+  // few KB, whereas every line in the viewport is megabytes. Results are cached so
+  // moving back over a dot is instant, and a stale response can never overwrite a
+  // newer hover.
+  const hoverGeomCache = useRef(new Map());
+  useEffect(() => {
+    const source = map.current?.getSource?.("hover-route");
+    if (!source) return;
+    const empty = { type: "FeatureCollection", features: [] };
+
+    if (!hoverTrailId) {
+      source.setData(empty);
+      return;
+    }
+
+    const cached = hoverGeomCache.current.get(hoverTrailId);
+    if (cached) {
+      source.setData(cached);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        // Hover only happens in dot mode, i.e. below zoom 11, where the z10 tier
+        // is ~28x smaller than full resolution and visually identical.
+        const res = await authedFetch(
+          `/api/discover/trail/${encodeURIComponent(hoverTrailId)}?detail=z10`,
+          { signal: controller.signal }
+        );
+        if (!res.ok) return;
+        const trail = await res.json();
+        if (!trail.geometry) return;
+        const collection = {
+          type: "FeatureCollection",
+          features: [{ type: "Feature", properties: {}, geometry: trail.geometry }],
+        };
+        hoverGeomCache.current.set(hoverTrailId, collection);
+        // The pointer may have moved on while this was in flight.
+        if (!cancelled) map.current?.getSource?.("hover-route")?.setData(collection);
+      } catch (err) {
+        if (err.name !== "AbortError") console.warn("[map] hover geometry", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [hoverTrailId]);
+
+  // ── Route planning: A + B -> a composed hike from the trail graph ───────────
+  useEffect(() => {
+    if (!planStart || !planEnd) {
+      setPlanRoute(null);
+      setPlanError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setPlanLoading(true);
+    setPlanError(null);
+    (async () => {
+      try {
+        const params = new URLSearchParams({
+          start: planStart.join(","),
+          end: planEnd.join(","),
+          out_and_back: String(planOutAndBack),
+          snap: "0.5",
+        });
+        const res = await authedFetch(`/api/discover/graph/route?${params}`, {
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.detail || `Routing failed (${res.status})`);
+        if (!data.ok) {
+          setPlanRoute(null);
+          setPlanError(data.detail || "No route found.");
+        } else {
+          setPlanRoute(data);
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") setPlanError(err.message);
+      } finally {
+        setPlanLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [planStart, planEnd, planOutAndBack]);
+
+  // Draw the composed route and its two endpoints.
+  useEffect(() => {
+    const routeSource = map.current?.getSource?.("plan-route");
+    const pointSource = map.current?.getSource?.("plan-points");
+    if (!routeSource || !pointSource) return;
+
+    routeSource.setData(
+      planRoute?.geometry
+        ? {
+            type: "FeatureCollection",
+            features: [
+              { type: "Feature", properties: {}, geometry: planRoute.geometry },
+            ],
+          }
+        : { type: "FeatureCollection", features: [] }
+    );
+
+    const points = [];
+    if (planStart) {
+      points.push({
+        type: "Feature",
+        properties: { role: "start" },
+        geometry: { type: "Point", coordinates: planStart },
+      });
+    }
+    if (planEnd) {
+      points.push({
+        type: "Feature",
+        properties: { role: "end" },
+        geometry: { type: "Point", coordinates: planEnd },
+      });
+    }
+    pointSource.setData({ type: "FeatureCollection", features: points });
+  }, [planRoute, planStart, planEnd]);
+
+  const clearPlan = useCallback(() => {
+    setPlanStart(null);
+    setPlanEnd(null);
+    setPlanRoute(null);
+    setPlanError(null);
+  }, []);
+
+  // ── Dots: fetched once per filter set, never per pan ────────────────────────
+  // Statewide dots are 2.4 MB. Re-requesting that on every pan is what made the map
+  // feel slow; the whole set is small enough to hold client-side and let Mapbox
+  // cull and cluster, so panning and zooming become pure client work.
+  useEffect(() => {
+    if (!mapReady) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const params = buildParams(filters, null);
+        const res = await authedFetch(`/api/discover/dots?${params}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const geo = await res.json();
+        setDotCount(geo.returned || 0);
+        map.current?.getSource("trail-dots")?.setData({
+          type: "FeatureCollection",
+          features: geo.features || [],
+        });
+      } catch (err) {
+        if (err.name !== "AbortError") console.warn("[map] dots", err);
+      }
+    })();
+    return () => controller.abort();
+  }, [filters, mapReady, styleEpoch]);
 
   // ── Fetch results whenever the viewport or filters change ───────────────────
   useEffect(() => {
@@ -1569,10 +2197,17 @@ export default function DiscoverPage() {
         const params = buildParams(filters, bbox);
         params.set("limit", "60");
 
-        const [listRes, mapRes] = await Promise.all([
+        // Lines are viewport-scoped because they are large; dots are not fetched
+        // here at all (see the dots effect) because panning must not refetch them.
+        const requests = [
           authedFetch(`/api/discover/search?${params}`, { signal: controller.signal }),
-          authedFetch(`/api/discover/map?${params}`, { signal: controller.signal }),
-        ]);
+        ];
+        if (!dotMode) {
+          requests.push(
+            authedFetch(`/api/discover/map?${params}`, { signal: controller.signal })
+          );
+        }
+        const [listRes, mapRes] = await Promise.all(requests);
 
         if (!listRes.ok) throw new Error(`Search failed (${listRes.status})`);
         const list = await listRes.json();
@@ -1580,13 +2215,24 @@ export default function DiscoverPage() {
         setTotal(list.total || 0);
         setFacets(list.facets || null);
 
-        if (mapRes.ok) {
+        const empty = { type: "FeatureCollection", features: [] };
+        if (dotMode) {
+          // Dots own the map at this zoom; clear the line source so the two
+          // representations of the same trails are never drawn together.
+          map.current?.getSource("trails")?.setData(empty);
+          setTruncated(false);
+        } else if (mapRes?.ok) {
           const geo = await mapRes.json();
           setTruncated(Boolean(geo.truncated));
           map.current?.getSource("trails")?.setData({
             type: "FeatureCollection",
             features: geo.features || [],
           });
+          // The dots source is deliberately NOT emptied here. Emptying it left the
+          // map blank on the way back out, because the dots effect keys on filters
+          // rather than zoom and never refilled it. The dot layers carry a
+          // `maxzoom` instead, so they hide and reappear on their own.
+          map.current?.getSource("hover-route")?.setData(empty);
         }
       } catch (err) {
         if (err.name !== "AbortError") setError(err.message);
@@ -1599,7 +2245,7 @@ export default function DiscoverPage() {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [bbox, filters, mapReady, styleEpoch]);
+  }, [bbox, filters, mapReady, styleEpoch, dotMode]);
 
   const mapMissing = !MAPBOX_TOKEN;
 
@@ -1633,6 +2279,8 @@ export default function DiscoverPage() {
     (filters.lengthMin || filters.lengthMax ? 1 : 0) +
     (filters.gainMin || filters.gainMax ? 1 : 0) +
     (filters.routeType ? 1 : 0) +
+    (filters.wildernessArea ? 1 : 0) +
+    (filters.activity && filters.activity !== "hiking" ? 1 : 0) +
     (filters.month ? 1 : 0);
 
   const availableFeatures = useMemo(() => {
@@ -1642,11 +2290,14 @@ export default function DiscoverPage() {
   }, [facets]);
 
   return (
-    <div className="h-screen flex flex-col bg-[var(--sunken)]">
+    <div className="h-dvh flex flex-col bg-[var(--sunken)]">
       {/* Header */}
-      <header className="shrink-0 border-b border-[var(--line)] bg-[var(--panel)] px-5 py-3 flex items-center gap-4 z-20">
+      <header className="shrink-0 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-2.5 sm:px-5 sm:py-3 flex flex-wrap items-center gap-2 sm:gap-4 z-20">
         <h1 className="text-[15px] font-semibold tracking-[-0.01em] text-[var(--fg)]">OpenTrails</h1>
-        <div className="flex-1 max-w-md">
+        {/* `flex-1` is basis:0, which beats `w-full` and kept the search box
+            squeezed onto the title row on a phone. Below sm it is a full-basis
+            item so flex-wrap drops it onto its own line. */}
+        <div className="order-last basis-full flex-none sm:order-none sm:basis-auto sm:flex-1 sm:max-w-md">
           <input
             value={filters.q}
             onChange={(e) => update({ q: e.target.value })}
@@ -1685,18 +2336,54 @@ export default function DiscoverPage() {
         >
           {theme === "dark" ? <SunIcon /> : <MoonIcon />}
         </button>
-        <Link to="/plan" className="text-sm text-[var(--fg-2)] hover:text-[var(--fg)]:text-[var(--fg)]">
+        <Link to="/plan" className="hidden sm:inline text-sm text-[var(--fg-2)] hover:text-[var(--fg)]:text-[var(--fg)]">
           Trip planner
         </Link>
-        <Link to="/trips" className="text-sm text-[var(--fg-2)] hover:text-[var(--fg)]:text-[var(--fg)]">
+        <Link to="/trips" className="hidden sm:inline text-sm text-[var(--fg-2)] hover:text-[var(--fg)]:text-[var(--fg)]">
           My trips
         </Link>
       </header>
 
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex flex-col md:flex-row min-h-0">
         {/* Filters + results */}
-        <aside className="w-[380px] shrink-0 border-r border-[var(--line)] bg-[var(--panel)] flex flex-col min-h-0">
+        <aside className="order-2 md:order-1 w-full md:w-[380px] md:shrink-0 flex-1 md:flex-none border-t md:border-t-0 md:border-r border-[var(--line)] bg-[var(--panel)] flex flex-col min-h-0">
           <div className="px-4 py-3 border-b border-[var(--line)] space-y-3.5 overflow-y-auto max-h-[52%]">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--fg-3)] mb-1.5">
+                Activity
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {ACTIVITIES.map(([key, label, help]) => {
+                  const on = filters.activity === key;
+                  const count = facets?.activity?.[key];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      title={help}
+                      // Selecting the active chip clears it, so "show me
+                      // everything, jeep roads included" is one click away.
+                      onClick={() => update({ activity: on ? "" : key })}
+                      disabled={count === 0 && !on}
+                      className={classNames(
+                        "cursor-pointer rounded-full px-2.5 py-1 text-xs border transition-all duration-200",
+                        on
+                          ? "border-transparent bg-[var(--accent)] text-[var(--accent-fg)]"
+                          : count === 0
+                          ? "border-[var(--line)] text-[var(--fg-3)] cursor-not-allowed"
+                          : "border-[var(--line)] text-[var(--fg-2)] hover:border-[var(--line-strong)]"
+                      )}
+                    >
+                      {label}
+                      {count != null && (
+                        <span className="ml-1 opacity-60">{count}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <RangeRow
               label="Length"
               unit="mi"
@@ -1826,6 +2513,26 @@ export default function DiscoverPage() {
               </div>
             </div>
 
+            {Object.keys(facets?.wilderness_area || {}).length > 0 && (
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--fg-3)] mb-1.5">
+                  Wilderness
+                </p>
+                <select
+                  value={filters.wildernessArea}
+                  onChange={(e) => update({ wildernessArea: e.target.value })}
+                  className="w-full rounded-lg border border-[var(--line)] bg-[var(--sunken)] text-[var(--fg)] px-2 py-1.5 text-sm"
+                >
+                  <option value="">Any area</option>
+                  {Object.entries(facets?.wilderness_area || {}).map(([area, count]) => (
+                    <option key={area} value={area}>
+                      {area} ({count})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="flex gap-2">
               <div className="flex-1">
                 <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--fg-3)] mb-1.5">Route</p>
@@ -1873,6 +2580,8 @@ export default function DiscoverPage() {
                     features: [],
                     featuresMode: "any",
                     routeType: "",
+                    wildernessArea: "",
+                    activity: "hiking",
                     month: "",
                     sort: filters.sort,
                   })
@@ -1938,12 +2647,14 @@ export default function DiscoverPage() {
         </aside>
 
         {/* Map */}
-        <main className="flex-1 relative min-w-0">
+        <main className="order-1 md:order-2 relative min-w-0 h-[42vh] shrink-0 md:h-auto md:flex-1 md:shrink">
           {/* h-full/w-full rather than `absolute inset-0`: mapbox-gl.css sets
               `.mapboxgl-map { position: relative }`, which overrides Tailwind's
               `absolute`, leaving inset-0 inert and the container 0px tall — and
               Mapbox never fires `load` on a zero-height container. */}
           <div ref={mapContainer} className="h-full w-full" />
+
+          <DotHoverCard card={hoverCard} />
 
           {mapMissing && (
             <div className="absolute inset-0 grid place-items-center bg-[var(--chip)] px-8">
@@ -2011,30 +2722,173 @@ export default function DiscoverPage() {
             >
               {pitched ? "2D" : "3D"}
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setPlanMode((on) => {
+                  if (on) clearPlan();
+                  return !on;
+                });
+              }}
+              aria-pressed={planMode}
+              title="Compose a hike between two points on the trail network"
+              className={classNames(
+                "cursor-pointer self-start rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200 backdrop-blur-xl shadow-[var(--e2)]",
+                planMode
+                  ? "border-transparent bg-[var(--accent)] text-[var(--accent-fg)]"
+                  : "border-[var(--line)] bg-[var(--glass)] text-[var(--fg-2)] hover:text-[var(--fg)]"
+              )}
+            >
+              {planMode ? "Planning…" : "Plan a hike"}
+            </button>
           </div>
+
+          {planMode && (
+            <div className="absolute inset-x-3 top-[7.5rem] z-10 w-auto md:inset-x-auto md:left-4 md:top-[8.5rem] md:w-[300px] max-h-[60%] overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--panel)]/95 p-3.5 shadow-xl backdrop-blur">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--fg-3)]">
+                  Plan a hike
+                </p>
+                <button
+                  type="button"
+                  onClick={clearPlan}
+                  className="cursor-pointer text-[11px] text-[var(--fg-3)] underline hover:text-[var(--fg)]"
+                >
+                  Reset
+                </button>
+              </div>
+
+              {!planStart && (
+                <p className="mt-1.5 text-xs text-[var(--fg-2)]">
+                  Click the map to set your <strong className="text-[var(--fg)]">start</strong>.
+                </p>
+              )}
+              {planStart && !planEnd && (
+                <p className="mt-1.5 text-xs text-[var(--fg-2)]">
+                  Now click your <strong className="text-[var(--fg)]">destination</strong>.
+                </p>
+              )}
+
+              {planLoading && (
+                <p className="mt-2 text-xs text-[var(--fg-2)]">
+                  Routing…{" "}
+                  <span className="text-[var(--fg-3)]">
+                    the first request builds the trail network and can take a minute.
+                  </span>
+                </p>
+              )}
+
+              {planError && !planLoading && (
+                <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-800 [:root[data-theme=dark]_&]:text-amber-200">
+                  {planError}
+                </p>
+              )}
+
+              {planRoute && !planLoading && (
+                <div className="mt-2.5">
+                  <div className="flex items-baseline gap-3">
+                    <span className="text-lg font-semibold text-[var(--fg)]">
+                      {planRoute.miles} mi
+                    </span>
+                    <span className="text-xs text-[var(--fg-2)]">
+                      ↑ {Math.round(planRoute.gain_ft).toLocaleString()} ft
+                    </span>
+                  </div>
+
+                  <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-[var(--fg-2)]">
+                    <input
+                      type="checkbox"
+                      checked={planOutAndBack}
+                      onChange={(e) => setPlanOutAndBack(e.target.checked)}
+                      className="cursor-pointer accent-[var(--accent)]"
+                    />
+                    Return the same way
+                    <span className="text-[var(--fg-3)]">
+                      ({planRoute.one_way_miles} mi each way)
+                    </span>
+                  </label>
+
+                  <p className="mt-2.5 text-[11px] uppercase tracking-[0.18em] text-[var(--fg-3)]">
+                    {planRoute.trail_names?.length || 0} trail
+                    {planRoute.trail_names?.length === 1 ? "" : "s"}
+                  </p>
+                  <ol className="mt-1 max-h-40 space-y-0.5 overflow-y-auto text-xs">
+                    {(planRoute.segments || []).map((seg, i) => (
+                      <li key={i} className="flex justify-between gap-2">
+                        <span className="truncate text-[var(--fg)]">{seg.name}</span>
+                        <span className="shrink-0 text-[var(--fg-3)]">{seg.miles} mi</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Legend */}
           <div
             style={{ bottom: compare.length ? "16.5rem" : "1rem" }}
-            className="absolute left-4 rounded-xl bg-[var(--glass)] backdrop-blur-xl px-3 py-2.5 shadow-[var(--e2)] text-[11px] transition-all">
+            className="absolute left-4 hidden sm:block rounded-xl bg-[var(--glass)] backdrop-blur-xl px-3 py-2.5 shadow-[var(--e2)] text-[11px] transition-all">
             <p className="uppercase tracking-[0.18em] text-[var(--fg-3)] mb-1.5">Difficulty</p>
             <div className="space-y-1">
               {DIFFICULTIES.map((d) => (
                 <div key={d} className="flex items-center gap-2">
-                  <span className="h-0.5 w-5 rounded" style={{ background: palette[d] }} />
+                  {/* The swatch matches what is actually on the map at this zoom:
+                      a dot while browsing, a line once trails are drawn. */}
+                  {dotMode ? (
+                    <span
+                      className="h-2 w-2 rounded-full shrink-0"
+                      style={{ background: palette[d] }}
+                    />
+                  ) : (
+                    <span className="h-0.5 w-5 rounded" style={{ background: palette[d] }} />
+                  )}
                   <span className="capitalize text-[var(--fg-2)]">{d}</span>
                 </div>
               ))}
               <div className="flex items-center gap-2 pt-0.5 border-t border-[var(--line)] mt-1">
-                <span className="h-0.5 w-5 rounded" style={{ background: palette.unknown }} />
+                {dotMode ? (
+                  <span
+                    className="h-2 w-2 rounded-full shrink-0"
+                    style={{ background: palette.unknown }}
+                  />
+                ) : (
+                  <span className="h-0.5 w-5 rounded" style={{ background: palette.unknown }} />
+                )}
                 <span className="text-[var(--fg-2)]">unrated</span>
               </div>
             </div>
+
+            {dotMode && (
+              <div className="mt-2 pt-2 border-t border-[var(--line)] space-y-1 text-[10px] text-[var(--fg-3)]">
+                <div className="flex items-center gap-2">
+                  <span className="flex shrink-0 items-end gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--fg-3)]" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-[var(--fg-3)]" />
+                  </span>
+                  <span>bigger dot = longer trail</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-[var(--accent)]/70 text-[7px] font-semibold text-[var(--accent-fg)]">
+                    12
+                  </span>
+                  <span>trails grouped — click to zoom in</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-white/90 bg-[var(--fg-3)]" />
+                  <span>white ring = mapped trailhead</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Detail panel */}
           {selected && (
-            <div className="absolute top-4 right-4 w-[400px] max-h-[calc(100%-2rem)] overflow-y-auto rounded-2xl bg-[var(--panel)] shadow-[var(--shadow-[var(--e2)])]">
+            // z-30: full width on a phone, the panel would otherwise interleave
+            // with the map control buttons and they would show through it. On a
+            // 42vh map, covering the controls while a trail is open is correct.
+            <div className="absolute inset-x-3 top-3 z-30 w-auto md:inset-x-auto md:right-4 md:top-4 md:w-[400px] max-h-[calc(100%-1.5rem)] md:max-h-[calc(100%-2rem)] overflow-y-auto rounded-2xl bg-[var(--panel)] shadow-[var(--shadow-[var(--e2)])]">
               <div className="px-5 py-4 border-b border-[var(--line)] flex items-start justify-between gap-3">
                 <div>
                   <h2 className="font-semibold text-[var(--fg)] leading-snug">{selected.name}</h2>
@@ -2131,6 +2985,8 @@ export default function DiscoverPage() {
                   </div>
                 )}
 
+                <WildernessNotice wilderness={selected.wilderness} />
+
                 <PermitNotice permits={selected.permits} />
 
                 <ElevationProfile
@@ -2162,13 +3018,40 @@ export default function DiscoverPage() {
                   <div className="flex items-baseline justify-between gap-3 text-xs">
                     <span className="text-[var(--fg-3)]">Trailhead</span>
                     <span className="text-right text-[var(--fg)]">
-                      {selected.access.trailhead.name}
+                      {/* OSM trailheads are frequently unnamed; a located but
+                          unnamed trailhead is still worth showing. */}
+                      {selected.access.trailhead.name || "Mapped trailhead"}
+                      <span className="text-[var(--fg-3)]">
+                        {` · ${selected.access.trailhead.distance_mi} mi`}
+                      </span>
                       {selected.access.parking && (
                         <span className="text-[var(--fg-3)]"> · parking</span>
                       )}
                     </span>
                   </div>
                 )}
+
+                {ACCESS_ROWS.map(([key, label]) => {
+                  const hit = (selected.access || {})[key];
+                  if (!hit) return null;
+                  const detail = hit.details || {};
+                  return (
+                    <div
+                      key={key}
+                      className="flex items-baseline justify-between gap-3 text-xs"
+                    >
+                      <span className="text-[var(--fg-3)]">{label}</span>
+                      <span className="text-right text-[var(--fg)]">
+                        {hit.name || label}
+                        <span className="text-[var(--fg-3)]">
+                          {` · ${hit.distance_mi} mi`}
+                          {detail.water ? " · water" : ""}
+                          {detail.fee === "Y" ? " · fee" : ""}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
 
                 <dl className="text-xs space-y-1.5 pt-1 border-t border-[var(--line)]">
                   {selected.grade && (

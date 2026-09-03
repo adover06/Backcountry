@@ -5,6 +5,27 @@ import { authedFetch } from "../api/client";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
+// Hues walk by the golden angle so neighbouring legs land far apart on the wheel —
+// picking each colour at random gives near-duplicates often enough to defeat the
+// point, and re-running a route would reshuffle the map under you.
+//
+// Keyed by name, matching how the server groups legs. Happy Isles to Half Dome
+// leaves the John Muir Trail for the Mist Trail and rejoins it, and those two
+// stretches must read as one trail in two colours' worth of map — keying by
+// trail_id would paint them differently, because overlapping source records give
+// each run a different id.
+const GOLDEN_ANGLE = 137.508;
+
+function colorSegments(segments) {
+  const byTrail = new Map();
+  return segments.map((segment) => {
+    if (!byTrail.has(segment.name)) {
+      byTrail.set(segment.name, `hsl(${(byTrail.size * GOLDEN_ANGLE) % 360}, 68%, 45%)`);
+    }
+    return { ...segment, color: byTrail.get(segment.name) };
+  });
+}
+
 /**
  * Routing-graph inspector.
  *
@@ -26,6 +47,7 @@ export default function GraphPage() {
   const [start, setStart] = useState(null);
   const [end, setEnd] = useState(null);
   const [result, setResult] = useState(null);
+  const [segments, setSegments] = useState([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(null);
   const [outAndBack, setOutAndBack] = useState(true);
@@ -70,7 +92,26 @@ export default function GraphPage() {
         type: "line",
         source: "route",
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": "#7c3aed", "line-width": 4 },
+        paint: { "line-color": ["get", "color"], "line-width": 4 },
+      });
+      // One tag per leg, at the middle of that leg, so the map says which trail
+      // each colour is without a trip back to the sidebar.
+      map.current.addLayer({
+        id: "route-label",
+        type: "symbol",
+        source: "route",
+        layout: {
+          "symbol-placement": "line-center",
+          "text-field": ["get", "name"],
+          "text-size": 11,
+          "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+          "text-padding": 4,
+        },
+        paint: {
+          "text-color": ["get", "color"],
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 2,
+        },
       });
 
       map.current.addSource("pins", { type: "geojson", data: empty() });
@@ -144,6 +185,7 @@ export default function GraphPage() {
     if (!start || !end) return;
     setBusy(true);
     setResult(null);
+    setSegments([]);
     try {
       const params = new URLSearchParams({
         start: start.join(","),
@@ -155,17 +197,37 @@ export default function GraphPage() {
       const data = await res.json();
       setResult(data);
 
+      const legs = data.ok ? colorSegments(data.segments || []) : [];
+      setSegments(legs);
+
       const source = map.current?.getSource?.("route");
       if (source) {
         source.setData(
-          data.ok
-            ? { type: "FeatureCollection", features: [{ type: "Feature", geometry: data.geometry, properties: {} }] }
-            : empty()
+          legs.length
+            ? {
+                type: "FeatureCollection",
+                features: legs.map((leg, i) => ({
+                  type: "Feature",
+                  geometry: leg.geometry,
+                  properties: { name: leg.name, color: leg.color, miles: leg.miles, index: i },
+                })),
+              }
+            : data.ok
+              // A route with no legs should still draw. Falling through to the
+              // merged line beats an empty map that looks like a routing failure.
+              ? {
+                  type: "FeatureCollection",
+                  features: [
+                    { type: "Feature", geometry: data.geometry, properties: { name: "", color: "#7c3aed" } },
+                  ],
+                }
+              : empty()
         );
       }
       // Refresh status: the first route is what builds the graph.
       authedFetch("/api/discover/graph/status").then((r) => r.json()).then(setStatus).catch(() => {});
     } catch (err) {
+      setSegments([]);
       setResult({ ok: false, reason: "request_failed", detail: err.message });
     } finally {
       setBusy(false);
@@ -182,6 +244,7 @@ export default function GraphPage() {
     setStart(null);
     setEnd(null);
     setResult(null);
+    setSegments([]);
     map.current?.getSource?.("route")?.setData(empty());
   };
 
@@ -328,14 +391,31 @@ export default function GraphPage() {
                 <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--fg-3)] mb-1">
                   Trails strung together
                 </p>
-                <ol className="space-y-0.5 text-xs text-[var(--fg)]">
-                  {result.trail_names.map((n, i) => (
-                    <li key={`${n}-${i}`} className="flex gap-2">
-                      <span className="text-[var(--fg-3)] tabular-nums">{i + 1}.</span>
-                      {n}
-                    </li>
-                  ))}
-                </ol>
+                {segments.length ? (
+                  <ol className="space-y-1 text-xs text-[var(--fg)]">
+                    {segments.map((leg, i) => (
+                      <li key={`${leg.trail_id}-${i}`} className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: leg.color }}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{leg.name}</span>
+                        <span className="shrink-0 tabular-nums text-[var(--fg-3)]">
+                          {leg.miles} mi
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <ol className="space-y-0.5 text-xs text-[var(--fg)]">
+                    {result.trail_names.map((n, i) => (
+                      <li key={`${n}-${i}`} className="flex gap-2">
+                        <span className="text-[var(--fg-3)] tabular-nums">{i + 1}.</span>
+                        {n}
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </div>
             </div>
           )}

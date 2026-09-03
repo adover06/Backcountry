@@ -1,0 +1,958 @@
+<title>OpenTrails Field Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+  /* ── Tokens ───────────────────────────────────────────────────────────────
+     Every token is declared here, in the bare :root, so the un-stamped
+     "system" state always resolves. The blocks below only redefine values. */
+  :root {
+    color-scheme: light dark;
+
+    --paper:      #EDEFEA;   /* weatherproof map stock, cool not cream */
+    --surface:    #F6F7F3;
+    --surface-2:  #E3E7E0;
+    --ink:        #141C19;   /* green-black, the colour of survey ink */
+    --ink-2:      #46524D;
+    --ink-3:      #6E7A74;
+    --rule:       #C6CCC5;   /* contour-line grey */
+    --rule-soft:  #DCE1D9;
+
+    --verdigris:  #2E7D6B;   /* oxidised brass — the accent */
+    --verdigris-2:#1F5B4E;
+    --brass:      #9C7B33;   /* secondary mark, benchmark stamping */
+
+    /* The app's own difficulty ramp, reused so the page speaks its subject. */
+    --d-easy:      #2f9e59;
+    --d-moderate:  #7cb342;
+    --d-hard:      #d4a017;
+    --d-strenuous: #e07a2f;
+    --d-very:      #d4544e;
+
+    --shadow: 0 1px 2px rgba(20,28,25,.07), 0 8px 24px -12px rgba(20,28,25,.18);
+    --measure: 68ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0F1513;
+      --surface:    #16201C;
+      --surface-2:  #1E2A25;
+      --ink:        #DEE7E1;
+      --ink-2:      #A3B1AA;
+      --ink-3:      #78877F;
+      --rule:       #2C3A34;
+      --rule-soft:  #223029;
+      --verdigris:  #5FC3A6;
+      --verdigris-2:#8AD9C0;
+      --brass:      #D6AC5E;
+      --d-easy:      #4cc47a;
+      --d-moderate:  #9ed35f;
+      --d-hard:      #e5bd45;
+      --d-strenuous: #f0954f;
+      --d-very:      #ef7b74;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0F1513;
+    --surface:    #16201C;
+    --surface-2:  #1E2A25;
+    --ink:        #DEE7E1;
+    --ink-2:      #A3B1AA;
+    --ink-3:      #78877F;
+    --rule:       #2C3A34;
+    --rule-soft:  #223029;
+    --verdigris:  #5FC3A6;
+    --verdigris-2:#8AD9C0;
+    --brass:      #D6AC5E;
+    --d-easy:      #4cc47a;
+    --d-moderate:  #9ed35f;
+    --d-hard:      #e5bd45;
+    --d-strenuous: #f0954f;
+    --d-very:      #ef7b74;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+  }
+
+  /* ── Base ─────────────────────────────────────────────────────────────── */
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Sans 3", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: "Zilla Slab", Georgia, "Times New Roman", serif;
+    font-weight: 600;
+    text-wrap: balance;
+    line-height: 1.2;
+    margin: 0;
+  }
+
+  code, kbd, .mono, .fig {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  a { color: var(--verdigris-2); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--verdigris);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  /* ── Shell ────────────────────────────────────────────────────────────── */
+  .shell {
+    display: grid;
+    grid-template-columns: 232px minmax(0, 1fr);
+    gap: 56px;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 32px 96px;
+  }
+
+  /* ── Masthead ─────────────────────────────────────────────────────────── */
+  .masthead {
+    grid-column: 1 / -1;
+    padding: 56px 0 30px;
+    border-bottom: 2px solid var(--ink);
+    position: relative;
+    overflow: hidden;
+  }
+  /* Contour rings — the one decorative gesture, drawn from the subject. */
+  .masthead::after {
+    content: "";
+    position: absolute;
+    right: -120px; top: -90px;
+    width: 420px; height: 420px;
+    background: repeating-radial-gradient(
+      circle at 50% 50%,
+      transparent 0 13px,
+      var(--rule) 13px 14px
+    );
+    opacity: .5;
+    pointer-events: none;
+    mask-image: radial-gradient(circle at 50% 50%, #000 40%, transparent 72%);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .masthead::after { animation: drift 24s ease-in-out infinite alternate; }
+  }
+  @keyframes drift { to { transform: translate3d(-14px, 10px, 0) scale(1.04); } }
+
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--verdigris);
+    margin: 0 0 14px;
+  }
+  .masthead h1 {
+    font-size: clamp(38px, 5.4vw, 62px);
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    max-width: 15ch;
+  }
+  .standfirst {
+    max-width: 58ch;
+    margin: 16px 0 0;
+    font-size: 18.5px;
+    color: var(--ink-2);
+  }
+
+  .datum-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 34px;
+    margin-top: 30px;
+    position: relative;
+    z-index: 1;
+  }
+  .datum { display: flex; flex-direction: column; gap: 2px; }
+  .datum .n {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 25px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .datum .l {
+    font-size: 12px;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ── Legend rail ──────────────────────────────────────────────────────── */
+  .legend {
+    position: sticky;
+    top: 24px;
+    align-self: start;
+    padding-top: 44px;
+    font-size: 14px;
+  }
+  .legend p.k {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10.5px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 12px;
+  }
+  .legend ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+  .legend a {
+    display: grid;
+    grid-template-columns: 26px 1fr;
+    gap: 4px;
+    padding: 5px 8px 5px 0;
+    color: var(--ink-2);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    padding-left: 10px;
+    transition: color .15s, border-color .15s;
+  }
+  .legend a:hover { color: var(--ink); border-left-color: var(--verdigris); }
+  .legend a span:first-child {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--ink-3);
+    padding-top: 3px;
+  }
+
+  /* ── Main column ──────────────────────────────────────────────────────── */
+  main { padding-top: 44px; min-width: 0; }
+
+  section { margin-bottom: 68px; scroll-margin-top: 24px; }
+  section > h2 {
+    font-size: 30px;
+    letter-spacing: -0.012em;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 22px;
+  }
+  section > h2 .num {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--verdigris);
+    margin-right: 12px;
+    vertical-align: 3px;
+  }
+  h3 {
+    font-size: 19.5px;
+    margin: 32px 0 8px;
+  }
+  h4 {
+    font-size: 15px;
+    font-family: "JetBrains Mono", monospace;
+    font-weight: 700;
+    letter-spacing: .02em;
+    margin: 24px 0 6px;
+  }
+  p { max-width: var(--measure); margin: 0 0 14px; }
+  ul, ol.body { max-width: var(--measure); padding-left: 20px; margin: 0 0 14px; }
+  li { margin-bottom: 6px; }
+  strong { font-weight: 600; color: var(--ink); }
+
+  code {
+    font-size: .875em;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* ── The governing rule — the page's one pull quote ───────────────────── */
+  .rule-quote {
+    max-width: var(--measure);
+    margin: 26px 0;
+    padding: 22px 26px;
+    background: var(--surface);
+    border-left: 3px solid var(--brass);
+  }
+  .rule-quote p { margin: 0; font-size: 18px; }
+  .rule-quote p:first-child { font-family: "Zilla Slab", Georgia, serif; font-weight: 600; font-size: 20px; margin-bottom: 8px; }
+  .rule-quote .src { font-size: 14px; color: var(--ink-3); margin-top: 10px; }
+
+  /* ── Tables ───────────────────────────────────────────────────────────── */
+  .scroller { overflow-x: auto; margin: 0 0 18px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 480px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td.n, th.n { text-align: right; font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; padding-right: 0; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* ── Coverage chart ───────────────────────────────────────────────────── */
+  .coverage { display: flex; flex-direction: column; gap: 9px; max-width: var(--measure); margin: 4px 0 10px; }
+  .cov { display: grid; grid-template-columns: 168px 1fr 56px; gap: 14px; align-items: center; font-size: 14px; }
+  .cov .track { height: 9px; background: var(--surface-2); border-radius: 1px; overflow: hidden; }
+  .cov .fill { height: 100%; border-radius: 1px; }
+  .cov .pct { font-family: "JetBrains Mono", monospace; font-size: 13px; text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .cov .lab { color: var(--ink-2); }
+  .scale-note { font-size: 12.5px; color: var(--ink-3); max-width: var(--measure); margin: 0 0 6px; }
+
+  /* ── Flow diagram ─────────────────────────────────────────────────────── */
+  .flow {
+    display: grid;
+    gap: 14px;
+    max-width: var(--measure);
+    margin: 8px 0 20px;
+  }
+  .band {
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    padding: 16px 18px;
+  }
+  .band .cap {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10.5px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--verdigris);
+    margin-bottom: 10px;
+  }
+  .band .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12.5px;
+    padding: 4px 9px;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    white-space: nowrap;
+  }
+  .chip.out { border-color: var(--verdigris); color: var(--verdigris-2); }
+  .arrow { text-align: center; color: var(--ink-3); font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: .1em; }
+
+  /* ── Stage list (a real sequence, so it is numbered) ──────────────────── */
+  .stages { list-style: none; padding: 0; margin: 8px 0 18px; max-width: var(--measure); }
+  .stages li {
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    gap: 12px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--rule-soft);
+    margin: 0;
+  }
+  .stages li:last-child { border-bottom: none; }
+  .stages .i { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--verdigris); padding-top: 3px; }
+  .stages .nm { font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 14px; }
+  .stages .ds { font-size: 14.5px; color: var(--ink-2); }
+
+  /* ── Traps ────────────────────────────────────────────────────────────── */
+  .trap { max-width: var(--measure); border-top: 1px solid var(--rule); padding: 16px 0 4px; }
+  .trap .t { font-family: "Zilla Slab", Georgia, serif; font-weight: 600; font-size: 17px; margin-bottom: 4px; }
+  .trap p { font-size: 14.5px; color: var(--ink-2); margin-bottom: 8px; }
+
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    border-left: 2px solid var(--rule);
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    max-width: var(--measure);
+    margin: 0 0 16px;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  .foot {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--rule);
+    padding-top: 20px;
+    font-size: 13.5px;
+    color: var(--ink-3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+  }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; gap: 0; padding: 0 20px 64px; }
+    .legend { position: static; padding-top: 28px; padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+    .legend ol { flex-direction: row; flex-wrap: wrap; gap: 2px 4px; }
+    .legend a { border-left: none; padding: 4px 10px; border: 1px solid var(--rule); }
+    .legend a span:first-child { display: none; }
+    .legend a { grid-template-columns: 1fr; }
+    main { padding-top: 30px; }
+    .cov { grid-template-columns: 132px 1fr 50px; gap: 10px; font-size: 13.5px; }
+  }
+</style>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">Reference · California trail index</p>
+    <h1>OpenTrails Field Manual</h1>
+    <p class="standfirst">
+      How 13,786 California trails are assembled from a dozen public sources, why no
+      single one of them is sufficient, and what breaks when you assume otherwise.
+    </p>
+    <div class="datum-row">
+      <div class="datum"><span class="n">13,786</span><span class="l">Trails indexed</span></div>
+      <div class="datum"><span class="n">5</span><span class="l">Geometry sources</span></div>
+      <div class="datum"><span class="n">2</span><span class="l">API keys needed</span></div>
+      <div class="datum"><span class="n">200</span><span class="l">Tests</span></div>
+    </div>
+  </header>
+
+  <nav class="legend" aria-label="Contents">
+    <p class="k">Legend</p>
+    <ol>
+      <li><a href="#problem"><span>01</span><span>The problem</span></a></li>
+      <li><a href="#overview"><span>02</span><span>System overview</span></a></li>
+      <li><a href="#pipeline"><span>03</span><span>Build pipeline</span></a></li>
+      <li><a href="#model"><span>04</span><span>Data model</span></a></li>
+      <li><a href="#serving"><span>05</span><span>Serving &amp; performance</span></a></li>
+      <li><a href="#graph"><span>06</span><span>Routing graph</span></a></li>
+      <li><a href="#sources"><span>07</span><span>Data sources</span></a></li>
+      <li><a href="#deploy"><span>08</span><span>Deployment</span></a></li>
+      <li><a href="#limits"><span>09</span><span>Known limits</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- 01 ────────────────────────────────────────────────────────────── -->
+    <section id="problem">
+      <h2><span class="num">01</span>The problem</h2>
+
+      <p>
+        Two facts drive nearly every decision in this codebase. Both are about the
+        data, not the code.
+      </p>
+
+      <h3>No single free trail dataset is good enough</h3>
+      <p>
+        Each source holds one piece. USFS has geometry and allowed-use but no national
+        parks. NPS has parks but no forests. Neither has regional or county land —
+        which is where most Californians actually walk. Nobody has elevation. The
+        product is the <strong>conflation</strong>. That is also why “there is no good
+        free trail data” feels true: the pieces exist, but nobody hands you them
+        joined.
+      </p>
+
+      <h3>No dataset models a hike</h3>
+      <p>
+        Every source publishes trail <em>segments</em>, because segments are what
+        agencies administer and budget against. “Half Dome is a 14-mile hike from
+        Happy Isles” is a visitor-facing composition no land manager has an
+        operational reason to record — which is why OpenStreetMap also models Half
+        Dome Trail as <span class="fig">2.00&nbsp;mi</span>. The absence is
+        structural, so composition has to be <strong>computed</strong>. That is what
+        the routing graph exists for.
+      </p>
+
+      <div class="rule-quote">
+        <p>Missing is never rendered as a value.</p>
+        <p>
+          Every check reports ok or unavailable. The risk engine has an
+          <code>incomplete</code> state that cannot render green. A gain filter
+          excludes a trail whose elevation is unknown rather than treating it as flat.
+          Unknown gain returns <code>None</code>, never <code>0</code>.
+        </p>
+        <p class="src">Most bugs found in this codebase have been violations of this rule.</p>
+      </div>
+    </section>
+
+    <!-- 02 ────────────────────────────────────────────────────────────── -->
+    <section id="overview">
+      <h2><span class="num">02</span>System overview</h2>
+
+      <div class="flow">
+        <div class="band">
+          <div class="cap">Build · offline, minutes to hours</div>
+          <div class="row">
+            <span class="chip">agency GeoJSON</span>
+            <span class="chip">ArcGIS layers</span>
+            <span class="chip">Overpass</span>
+            <span class="chip">DEM tiles</span>
+          </div>
+          <div class="arrow" style="padding:10px 0">↓ &nbsp;pipeline/&nbsp; ↓</div>
+          <div class="row">
+            <span class="chip out">trails_index.json · 28 MB</span>
+            <span class="chip out">trails_geom.sqlite · 233 MB</span>
+          </div>
+        </div>
+
+        <div class="arrow">bind-mounted, read-only</div>
+
+        <div class="band">
+          <div class="cap">Serve · request time, milliseconds</div>
+          <div class="row">
+            <span class="chip">FastAPI</span>
+            <span class="chip">discovery_api</span>
+            <span class="chip">discover · index in memory</span>
+            <span class="chip">graph_service · lazy</span>
+            <span class="chip">checks · live conditions</span>
+          </div>
+          <div class="arrow" style="padding:10px 0">↓</div>
+          <div class="row">
+            <span class="chip">nginx · SPA + /api proxy + gzip</span>
+            <span class="chip">PostgreSQL · users, trips</span>
+          </div>
+        </div>
+      </div>
+
+      <p>
+        The split is deliberate: <strong>trail data is a build artefact, user data is
+        a database.</strong> Trail data is read-only, regenerated wholesale, and
+        versioned with the index. Postgres holds what is genuinely relational and
+        mutable. Putting the index in Postgres would make every rebuild a data
+        migration.
+      </p>
+    </section>
+
+    <!-- 03 ────────────────────────────────────────────────────────────── -->
+    <section id="pipeline">
+      <h2><span class="num">03</span>Build pipeline</h2>
+
+      <p>
+        <code>python -m pipeline.build_index</code> — stages are skippable and
+        resumable. Numbered because this genuinely is a sequence: later stages read
+        what earlier ones wrote.
+      </p>
+
+      <ol class="stages">
+        <li><span class="i">01</span><span><span class="nm">normalize</span><br><span class="ds">12,315 USFS segments → 8,162 trails, grouped by <code>TRAIL_CN</code></span></span></li>
+        <li><span class="i">02</span><span><span class="nm">nps</span><br><span class="ds">Park trails, plus the opt-in SEKI fallback that carries Mount Whitney</span></span></li>
+        <li><span class="i">03</span><span><span class="nm">osm-routes</span><br><span class="ds">Long-distance <code>route=hiking</code> relations ≥ 5 mi</span></span></li>
+        <li><span class="i">04</span><span><span class="nm">osm-trails</span><br><span class="ds">Named OSM ways → trails on regional, county and state park land</span></span></li>
+        <li><span class="i">05</span><span><span class="nm">elevation</span><br><span class="ds">DEM sampling at one reading per 0.05 mi; gain via hysteresis walk</span></span></li>
+        <li><span class="i">06</span><span><span class="nm">scenery</span><br><span class="ds">GNIS named features + OSM POIs, joined by proximity</span></span></li>
+        <li><span class="i">07</span><span><span class="nm">access</span><br><span class="ds">Trailheads, parking, water and camping from NPS + USFS + OSM</span></span></li>
+        <li><span class="i">08</span><span><span class="nm">technical</span><br><span class="ds"><code>sac_scale</code> and <code>trail_visibility</code> badges</span></span></li>
+        <li><span class="i">09</span><span><span class="nm">permits</span><br><span class="ds">Recreation.gov permit facilities, joined by proximity</span></span></li>
+        <li><span class="i">10</span><span><span class="nm">wilderness</span><br><span class="ds">Point-in-polygon land status against 88 designated areas</span></span></li>
+        <li><span class="i">11</span><span><span class="nm">markers</span><br><span class="ds">The point to draw for each trail — must run after <code>access</code></span></span></li>
+      </ol>
+
+      <h3>Three sweeps are not build stages</h3>
+      <p>
+        Each takes roughly an hour against rate-limited public mirrors, so none of
+        them may hide inside a build. Output is cached per tile and resumes cleanly.
+      </p>
+<pre><code>python -m pipeline.osm_access    # access points → data/osm_access_points.json
+python -m pipeline.osm_trails    # named ways    → data/osm_ways.json
+python -m pipeline.geom_store    # LOD geometry  → data/trails_geom.sqlite</code></pre>
+      <p>
+        <code>access.py</code> compares <strong>mtimes</strong> against the sweep
+        output. A version check alone was not enough: the cache gets written before
+        the sweep exists, so a matching version would have made the app ignore the
+        sweep’s results permanently.
+      </p>
+    </section>
+
+    <!-- 04 ────────────────────────────────────────────────────────────── -->
+    <section id="model">
+      <h2><span class="num">04</span>Data model</h2>
+
+      <h3>Two files, split deliberately</h3>
+      <div class="scroller">
+        <table>
+          <thead><tr><th>File</th><th class="n">Size</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td><code>trails_index.json</code></td><td class="n">28 MB</td><td>Searchable records — <strong>no geometry</strong></td></tr>
+            <tr><td><code>trails_geom.sqlite</code></td><td class="n">233 MB</td><td>Geometry at four levels of detail, plus elevation profiles</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The index stays small enough to hold in memory and scan in well under a
+        millisecond. Geometry is fetched per trail, on demand.
+      </p>
+
+      <h3>Field coverage</h3>
+      <p class="scale-note">Share of all 13,786 trails carrying each field. Bars share one scale, 0–100%.</p>
+      <div class="coverage">
+        <div class="cov"><span class="lab">Elevation, marker</span><span class="track"><span class="fill" style="width:100%;background:var(--d-easy)"></span></span><span class="pct">100%</span></div>
+        <div class="cov"><span class="lab">Allowed use</span><span class="track"><span class="fill" style="width:81.1%;background:var(--d-easy)"></span></span><span class="pct">81.1%</span></div>
+        <div class="cov"><span class="lab">Surface</span><span class="track"><span class="fill" style="width:78.6%;background:var(--d-moderate)"></span></span><span class="pct">78.6%</span></div>
+        <div class="cov"><span class="lab">Scenery features</span><span class="track"><span class="fill" style="width:52.3%;background:var(--d-moderate)"></span></span><span class="pct">52.3%</span></div>
+        <div class="cov"><span class="lab">Campground in reach</span><span class="track"><span class="fill" style="width:28.6%;background:var(--d-hard)"></span></span><span class="pct">28.6%</span></div>
+        <div class="cov"><span class="lab">Permits (advisory)</span><span class="track"><span class="fill" style="width:22.3%;background:var(--d-hard)"></span></span><span class="pct">22.3%</span></div>
+        <div class="cov"><span class="lab">Trailhead</span><span class="track"><span class="fill" style="width:19.9%;background:var(--d-strenuous)"></span></span><span class="pct">19.9%</span></div>
+        <div class="cov"><span class="lab">Drinking water</span><span class="track"><span class="fill" style="width:13.0%;background:var(--d-very)"></span></span><span class="pct">13.0%</span></div>
+        <div class="cov"><span class="lab">Wilderness</span><span class="track"><span class="fill" style="width:12.7%;background:var(--d-very)"></span></span><span class="pct">12.7%</span></div>
+      </div>
+
+      <h3>Two points that mean different things</h3>
+      <div class="trap">
+        <div class="t"><code>center</code> — a bounding-box midpoint</div>
+        <p>
+          Correct for fitting a viewport, and wrong for drawing. Measured across the
+          index, <strong>13.2% sit more than 0.25 mi off their own trail</strong>; the
+          worst is 4.71 mi out, which points at a different valley.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t"><code>marker</code> — what the map actually draws</div>
+        <p>
+          The joined trailhead where one exists (19.9%), otherwise the vertex at half
+          the trail’s length. Median distance from the trail: <span class="fig">0</span>.
+        </p>
+      </div>
+
+      <h3>Activity is partly published, partly derived</h3>
+      <p>
+        <code>hiking: allowed</code> is true for <strong>11,150 of the 11,150</strong>
+        trails carrying use data, so it separates nothing. What separates a trail from
+        a road is whether motors are allowed on it — and USFS publishes that, so no
+        hand labelling is needed. “Rubicon Jeep” carries
+        <span class="fig">fourwd + atv + motorcycle</span> and excludes itself.
+      </p>
+      <div class="scroller">
+        <table>
+          <thead><tr><th>Value</th><th>Definition</th><th class="n">Trails</th></tr></thead>
+          <tbody>
+            <tr><td><code>hiking</code></td><td>Not <em>known</em> motorised</td><td class="n">11,184</td></tr>
+            <tr><td><code>backpacking</code></td><td>Not motorised, and in wilderness <em>or</em> ≥ 8 mi — <strong>derived</strong></td><td class="n">2,043</td></tr>
+            <tr><td><code>bike</code></td><td>Published allowed-use</td><td class="n">5,688</td></tr>
+            <tr><td><code>horse</code></td><td>Published allowed-use</td><td class="n">2,203</td></tr>
+            <tr><td><code>motorized</code></td><td>4WD, ATV, motorcycle or snowmobile</td><td class="n">2,602</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Silence is not evidence: 18.9% of the index has no allowed-use data at all, and
+        treating that as motorised would drop most of the NPS set out of every hiking
+        search.
+      </p>
+    </section>
+
+    <!-- 05 ────────────────────────────────────────────────────────────── -->
+    <section id="serving">
+      <h2><span class="num">05</span>Serving &amp; performance</h2>
+
+      <h3>Facets count over the right pool</h3>
+      <p>
+        Each filter is a named predicate, and facet counts are computed over a pool
+        with that filter’s <em>own</em> dimension excluded. A chip therefore shows
+        “how many results choosing this would give”, not “how many survive the choices
+        already made” — counting over the fully-filtered set makes selecting one
+        filter grey out every other.
+      </p>
+
+      <h3>The map: dots, then lines</h3>
+      <div class="scroller">
+        <table>
+          <thead><tr><th>Zoom</th><th>Endpoint</th><th class="n">Payload</th></tr></thead>
+          <tbody>
+            <tr><td>&lt; 11</td><td><code>/api/discover/dots</code></td><td class="n">73 KB</td></tr>
+            <tr><td>≥ 11</td><td><code>/api/discover/map?detail=z12</code></td><td class="n">265 KB</td></tr>
+            <tr><td>hover</td><td><code>/api/discover/trail/{id}?detail=z10</code></td><td class="n">27 KB</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Dots are the important case. <code>marker</code> lives in the search index, so
+        the dots path <strong>never calls <code>load_geometry()</code></strong> — and
+        dots are fetched once per filter set rather than per pan, so panning and
+        zooming become pure client work.
+      </p>
+
+      <h3>Measured, before and after</h3>
+      <div class="scroller">
+        <table>
+          <thead><tr><th>&nbsp;</th><th class="n">Before</th><th class="n">After</th></tr></thead>
+          <tbody>
+            <tr><td>Cold page load, total</td><td class="n">~10.4 MB</td><td class="n">1.09 MB</td></tr>
+            <tr><td>Dense viewport</td><td class="n">7.9 MB / 5.47 s</td><td class="n">73 KB / 0.02 s</td></tr>
+            <tr><td>One trail’s geometry</td><td class="n">4.68 s</td><td class="n">7 ms</td></tr>
+            <tr><td>Backend resident memory</td><td class="n">~950 MB</td><td class="n">125 MB</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        What mattered, in order: <strong>nginx had no gzip configured at all</strong> —
+        the JS bundle shipped 2.27 MB raw; the list projection shipped 290 KB per pan
+        of fields no card renders; dots were refetched on every pan; and single-key
+        lookups were parsing a 167 MB JSON sidecar.
+      </p>
+    </section>
+
+    <!-- 06 ────────────────────────────────────────────────────────────── -->
+    <section id="graph">
+      <h2><span class="num">06</span>Routing graph</h2>
+
+      <p>
+        The answer to “no dataset models a hike”. Snap every vertex to a 4 m grid;
+        any shared point is a junction. Split trails at junctions into edges. Weight
+        by length and directional gain. Then run <strong>Dijkstra</strong> over
+        <span class="fig">214,852</span> nodes and <span class="fig">441,213</span>
+        edges. A hike becomes a path: trailhead → destination → back.
+      </p>
+
+      <div class="scroller">
+        <table>
+          <thead><tr><th>Route</th><th class="n">Computed</th><th class="n">Published</th></tr></thead>
+          <tbody>
+            <tr><td>Half Dome, from Happy Isles</td><td class="n">13.88 mi / 5,245 ft</td><td class="n">~15 mi / 4,800 ft</td></tr>
+            <tr><td>Nevada Fall, from Happy Isles</td><td class="n">5.5 mi / 2,176 ft</td><td class="n">~5.4 mi / 1,900 ft</td></tr>
+            <tr><td>Ryan Mountain</td><td class="n">2.8 mi / 1,054 ft</td><td class="n">~3 mi / 1,050 ft</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Half Dome indexes as a <span class="fig">2.00 mi</span> segment and composes
+        to a <span class="fig">13.88 mi</span> hike. That gap is the entire point.
+      </p>
+
+      <h3>Four things that had to be right, each wrong first</h3>
+      <div class="trap">
+        <div class="t">Node identity must be tight — 4 m</div>
+        <p>Loose snapping fused adjacent switchback legs and let the router cut straight up Whitney: 8.6 mi against a true 22.</p>
+      </div>
+      <div class="trap">
+        <div class="t">Tight snapping alone disconnects the network</div>
+        <p>Agencies do not share coordinates where their trails meet. A separate pass stitches <em>endpoints</em> within 35 m; stitching mid-trail vertices would reintroduce the fusion.</p>
+      </div>
+      <div class="trap">
+        <div class="t">Gain is computed once along the finished path</div>
+        <p>Never summed per edge. Nodes are metres apart, so per-edge accumulation counted DEM noise as climb and reported Whitney at 14,232 ft.</p>
+      </div>
+      <div class="trap">
+        <div class="t"><code>nearest_node</code> must size its search from <code>max_miles</code></div>
+        <p>A hardcoded ±3 cells spanned 60 m at 20 m snapping but only 12 m at 4 m, so trailheads silently resolved to no node and routes returned “no path”.</p>
+      </div>
+
+      <h3>Concurrent routes, and why legs are merged</h3>
+      <p>
+        Long-distance relations are mapped over the same ground as the local trails
+        they follow, so consecutive edges flip between two records: a 17.8 mi hike
+        came back as <strong>80 legs alternating every 0.02 mi</strong>. Collapsing
+        consecutive duplicates cannot help when the sequence is A,B,A,B. Legs shorter
+        than a stride (0.15 mi) are absorbed into their larger neighbour, shortest
+        first — 80 legs became 8, with mileage preserved exactly.
+      </p>
+
+      <h3>The cost, and it is real</h3>
+      <div class="scroller">
+        <table>
+          <tbody>
+            <tr><td>Build time</td><td class="n">~55 s</td><td>Blocks every other request — CPU-bound Python in one worker</td></tr>
+            <tr><td>Resident memory</td><td class="n">~1.8 GB</td><td>More than the rest of the process combined</td></tr>
+            <tr><td>Warm query</td><td class="n">~25 ms</td><td>Once built, it is fast</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <code>GRAPH_PREWARM=1</code> moves the stall into container startup. It is
+        <strong>off by default</strong> because on a 1 GB VPS the memory alone is
+        fatal. Precomputing the graph to disk is the real fix, and the top open item.
+      </p>
+    </section>
+
+    <!-- 07 ────────────────────────────────────────────────────────────── -->
+    <section id="sources">
+      <h2><span class="num">07</span>Data sources</h2>
+
+      <p>
+        Everything is public domain, ODbL, or a permissive CC licence. Only two keys
+        are needed, and both degrade gracefully.
+      </p>
+
+      <div class="scroller">
+        <table>
+          <thead><tr><th>Source</th><th>Contributes</th><th>Licence</th><th>Key</th></tr></thead>
+          <tbody>
+            <tr><td>USFS National Forest System Trails</td><td class="n">8,162 trails</td><td>Public domain</td><td>—</td></tr>
+            <tr><td>OpenStreetMap ways</td><td class="n">3,092 trails</td><td>ODbL</td><td>—</td></tr>
+            <tr><td>NPS Public Trails</td><td class="n">1,863 trails</td><td>Public domain</td><td>—</td></tr>
+            <tr><td>SEKI fallback (rehost)</td><td class="n">345 trails</td><td>Unconfirmed</td><td>—</td></tr>
+            <tr><td>OSM <code>route=hiking</code> relations</td><td class="n">324 routes</td><td>ODbL</td><td>—</td></tr>
+            <tr><td>AWS Terrarium DEM</td><td>Elevation for 100%</td><td>Public</td><td>—</td></tr>
+            <tr><td>USGS GNIS</td><td>18,437 named features</td><td>Public domain</td><td>—</td></tr>
+            <tr><td>OpenStreetMap POIs</td><td>Scenery GNIS lacks</td><td>ODbL</td><td>—</td></tr>
+            <tr><td>USFS INFRA recreation sites</td><td>625 trailheads, 1,310 camps</td><td>Public domain</td><td>—</td></tr>
+            <tr><td>USFS EDW Wilderness</td><td>88 designated areas</td><td>Public domain</td><td>—</td></tr>
+            <tr><td>OpenStreetMap access points</td><td class="n">11,237 points</td><td>ODbL</td><td>—</td></tr>
+            <tr><td>Recreation.gov (RIDB)</td><td>Permits for 22.3%</td><td>US federal</td><td><strong>yes</strong></td></tr>
+            <tr><td>Wikimedia Commons</td><td>Trail photos</td><td>CC, per image</td><td>—</td></tr>
+            <tr><td>Mapbox</td><td>Basemap, terrain</td><td>Commercial</td><td><strong>yes</strong></td></tr>
+            <tr><td>NWS · AirNow · WFIGS · Open-Meteo · NOHRSC</td><td>Live conditions</td><td>Public</td><td>AirNow</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>The trap in each one</h3>
+      <div class="trap">
+        <div class="t">USFS — lowercase property names</div>
+        <p>
+          Fields are <code>trail_cn</code>, <code>trail_name</code>,
+          <code>segment_length</code>. An earlier loader read uppercase and returned
+          zero trails. Values are also dual-encoded (<code>12-20%</code> and
+          <code>TG05 - +12-20%</code>), and <code>N/A</code>, <code>None</code> and
+          <code>""</code> all mean missing.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t">USFS INFRA — there is no trailheads layer</div>
+        <p>
+          Trailheads are a <code>site_type</code> inside
+          <code>EDW_RecInfraRecreationSites_02</code>, which is why searching EDW for
+          a trailheads layer finds nothing. Absence also arrives as the
+          <em>string</em> <code>"No Data"</code>, not null.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t">NPS — Sequoia &amp; Kings Canyon returns zero</div>
+        <p>
+          Verified by both a unit query and a spatial query, so Mount Whitney is
+          otherwise absent entirely. The fallback is a third-party rehost with
+          unconfirmed provenance, so it is opt-in and every record it produces stays
+          labelled rather than passing as NPS-authoritative.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t">OSM ways — the largest gap, and a structural one</div>
+        <p>
+          Both agency sources are federal. Measured on the South Bay before this
+          source existed: <strong>15 trails in the index against 4,415 named OSM
+          ways</strong>. Sierra Azul, Almaden Quicksilver, Santa Teresa and Castle
+          Rock were all missing, because MROSD, EBRPD and Santa Clara County Parks
+          publish to neither USFS nor NPS.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t">OSM POIs — <code>stage_osm</code> only fetches when the file is absent</div>
+        <p>
+          Once <code>pois.json</code> exists the <code>--with-osm</code> branch is
+          unreachable, which is why an OSM supplement never entered a resumed build.
+          Scenery was GNIS-only, and <code>viewpoint</code>, <code>cave</code> and
+          <code>glacier</code> were missing entirely.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t">RIDB — <code>/permitentrances</code> is the wrong endpoint</div>
+        <p>
+          It looks obvious and is not: 907 nationally but only 34 in California, named
+          as opaque codes, with no Half Dome or Whitney at all. Permits are modelled as
+          <em>facilities</em> with <code>FacilityTypeDescription == "Permit"</code> —
+          only 7 in California, but precisely the ones that gate California hiking.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t">OSM access — <code>natural=spring</code> is deliberately excluded</div>
+        <p>
+          Despite 17,384 statewide. A spring is untreated and may be seasonal, and
+          promoting it to drinking water would tell a hiker there is water where there
+          may be none. Parking is admitted only when the name says trailhead, or every
+          supermarket car park qualifies.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t">DEM — summing positive deltas invents climb</div>
+        <p>
+          In testing, ±8 ft of sampling noise over 400 samples produced 1,050 ft of
+          phantom gain. Gain uses a hysteresis walk with a 15 ft threshold, validated
+          against Mt Whitney: sampled 14,477 ft against a true 14,505 ft.
+        </p>
+      </div>
+      <div class="trap">
+        <div class="t">Stubbed, not active</div>
+        <p>
+          Carrier coverage tiles (T-Mobile, AT&amp;T, Verizon) appear in
+          <code>planner_api.py</code> as empty strings with commented example URL
+          patterns. No carrier publishes a documented tile API; nothing is fetched.
+        </p>
+      </div>
+
+      <h3>Licensing position</h3>
+      <p>
+        ODbL applies to all OpenStreetMap-derived data. This project is personal-use
+        and undistributed, so <strong>share-alike does not trigger</strong>. If that
+        changes, attribute OpenStreetMap contributors — the index already declares its
+        provenance as
+        <span class="fig">USFS National Forest + NPS Public Trails + SEKI + OpenStreetMap (California)</span>.
+      </p>
+    </section>
+
+    <!-- 08 ────────────────────────────────────────────────────────────── -->
+    <section id="deploy">
+      <h2><span class="num">08</span>Deployment</h2>
+
+      <p>Two compose files, and the difference matters more than it looks.</p>
+      <div class="scroller">
+        <table>
+          <thead><tr><th>&nbsp;</th><th><code>docker-compose.local.yml</code></th><th><code>docker-compose.yml</code></th></tr></thead>
+          <tbody>
+            <tr><td>Backend port</td><td>Published on 6767</td><td>Not published — nginx proxies</td></tr>
+            <tr><td><code>./data</code></td><td><strong>Bind-mounted</strong></td><td><strong>Not mounted</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <code>.dockerignore</code> deliberately excludes <code>data/</code> from the
+        image — the index plus source is ~330 MB and has no business inside a layer.
+        <strong><code>docker-compose.yml</code> therefore has no path to an index and
+        503s every discovery route.</strong> Use the local file:
+      </p>
+<pre><code>docker compose -f docker-compose.local.yml up -d --build</code></pre>
+      <p>
+        App source and the frontend bundle are baked into images, so code changes need
+        <code>--build</code>, not a restart. Data is bind-mounted, so an index rebuild
+        needs only a restart — but <code>load_index()</code> caches into a module
+        global, so a restart <em>is</em> required. nginx gzips, and
+        <code>gzip_proxied any</code> matters: API responses come back through
+        <code>proxy_pass</code> and are otherwise skipped.
+      </p>
+    </section>
+
+    <!-- 09 ────────────────────────────────────────────────────────────── -->
+    <section id="limits">
+      <h2><span class="num">09</span>Known limits</h2>
+      <ul>
+        <li><strong>Segmentation is not a data problem.</strong> Verified across RIDB, NPS, OSM, Hiking Project and GPX corpora. Hence the graph.</li>
+        <li><strong>The routing graph is not persisted</strong> — 55 s build, 1.8 GB resident, blocks other requests while building.</li>
+        <li><strong>OSM way coverage is Bay Area only.</strong> Los Angeles, San Diego and Sacramento have the same gap and need the same sweep.</li>
+        <li><strong>Surface missing on 21.4%.</strong> Filling it needs way-level matching via a 1.2 GB Geofabrik extract — disproportionate so far.</li>
+        <li><strong>Fire filtering is by centroid</strong>, not true spatial intersection.</li>
+        <li><strong>Weather and AQI are point lookups</strong>, not route-aware.</li>
+        <li><strong>The conditions cache is process-local</strong> — no persistence, no sharing across workers.</li>
+        <li><strong><code>sac_scale</code> is a badge, never a facet</strong> — 0.3% coverage, and a filter dropping 99.7% of the index is worse than no filter.</li>
+        <li><strong>Mobile is “not squished”, not designed.</strong> React Native is the honest answer if it becomes a real target.</li>
+      </ul>
+
+      <h3>Testing</h3>
+      <p>
+        200 tests, about 0.2 s, no network and no index load. They encode the traps
+        above rather than the happy path: DEM noise not becoming gain,
+        <code>"No Data"</code> not becoming a value, an unmappable trail not being
+        reported as truncation, dots never loading geometry, a jeep road never being a
+        backpacking route.
+      </p>
+      <p>
+        <code>tests/test_api_wiring.py</code> walks the AST of every route handler and
+        asserts each name it reads is actually bound. It was added after a global
+        string replace introduced <code>NameError: name 'detail' is not defined</code>
+        into the photos endpoint — a 500 that no test touched, because those endpoints
+        need the real index to exercise.
+      </p>
+    </section>
+
+  </main>
+
+  <footer class="foot">
+    <span>OpenTrails · California trail discovery</span>
+    <span>13,786 trails · 5 geometry sources · 200 tests</span>
+    <span>Data: public domain &amp; ODbL · © OpenStreetMap contributors</span>
+  </footer>
+
+</div>

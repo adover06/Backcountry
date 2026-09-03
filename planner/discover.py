@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from rapidfuzz import fuzz
+from pipeline import geom_store
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 INDEX_PATH = _BASE_DIR / "data" / "trails_index.json"
@@ -109,6 +110,51 @@ def steepness_rating(length_mi: float | None, gain_ft: int | None) -> dict | Non
 # ── Index loading ─────────────────────────────────────────────────────────────
 
 
+# Uses that make a route a road rather than a trail. USFS publishes allowed-use per
+# trail, so this needs no hand labelling: "Rubicon Jeep" carries fourwd + atv +
+# motorcycle and is excluded by exactly the data that describes it.
+MOTORISED_USES = ("fourwd", "atv", "motorcycle", "snowmobile")
+
+# A hike long enough to be an overnight, absent any field that says so. Nothing in
+# any source records "this is a backpacking trip", so it is derived — see
+# ACTIVITY_PREDICATES — and the definition is stated in the UI rather than implied.
+BACKPACKING_MIN_MILES = 8.0
+
+
+def _use_allowed(trail: dict, key: str) -> bool:
+    return bool(((trail.get("activities") or {}).get(key) or {}).get("allowed"))
+
+
+def is_motorised(trail: dict) -> bool:
+    """Known to allow 4WD, ATV, motorcycle or snowmobile.
+
+    Deliberately *known*: 18.9% of the index has no allowed-use data at all, and
+    treating silence as motorised would drop 2,603 trails — most of the NPS set —
+    out of every hiking search.
+    """
+    return any(_use_allowed(trail, key) for key in MOTORISED_USES)
+
+
+def _is_backpacking(trail: dict) -> bool:
+    if is_motorised(trail):
+        return False
+    if (trail.get("wilderness") or {}).get("name"):
+        return True
+    return (trail.get("length_miles") or 0) >= BACKPACKING_MIN_MILES
+
+
+# `hiking` is not "hiking is allowed" — that is true of 11,150 of the 11,150 trails
+# carrying use data, so it separates nothing. What separates a trail from a road is
+# whether motors are allowed on it.
+ACTIVITY_PREDICATES = {
+    "hiking": lambda t: not is_motorised(t),
+    "backpacking": _is_backpacking,
+    "bike": lambda t: _use_allowed(t, "bike"),
+    "horse": lambda t: _use_allowed(t, "horse"),
+    "motorized": is_motorised,
+}
+
+
 def _augment(trail: dict) -> dict:
     """Add derived fields the search layer needs."""
     elevation = trail.get("elevation") or {}
@@ -158,7 +204,16 @@ def get_trail(trail_id: str) -> dict | None:
     return load_index()["by_id"].get(trail_id)
 
 
-def get_geometry(trail_id: str) -> dict | None:
+def get_geometry(trail_id: str, detail: str = "full") -> dict | None:
+    """One trail's geometry, from the SQLite store when it exists.
+
+    The store answers a primary-key read without holding anything resident. The
+    JSON fallback parses the whole 167 MB sidecar into ~945 MB of Python objects to
+    answer the same question, so it is a correctness fallback for an unbuilt store,
+    not an equivalent path. Build it with `python -m pipeline.geom_store`.
+    """
+    if geom_store.available():
+        return geom_store.get(trail_id, detail)
     return load_geometry().get(trail_id)
 
 
@@ -279,6 +334,7 @@ def search(
     month: int | None = None,
     activity: str | None = None,
     wilderness_only: bool = False,
+    wilderness_area: str | None = None,
     accessible_only: bool = False,
     sort: str = "relevance",
     limit: int = 50,
@@ -338,11 +394,23 @@ def search(
     def pass_activity(t):
         if not activity:
             return True
+        predicate = ACTIVITY_PREDICATES.get(activity)
+        if predicate:
+            return predicate(t)
         state = (t.get("activities") or {}).get(activity)
         return bool(state and state.get("allowed"))
 
     def pass_wilderness(t):
-        return not wilderness_only or bool(t.get("mgmt_area"))
+        # `mgmt_area` is an administrative management-area name, not a land-status
+        # designation, so it answered a different question than the filter asked:
+        # any trail with an admin area attached came back as "wilderness". The
+        # boundary test in pipeline/wilderness.py answers it directly.
+        return not wilderness_only or bool((t.get("wilderness") or {}).get("name"))
+
+    def pass_wilderness_area(t):
+        if not wilderness_area:
+            return True
+        return (t.get("wilderness") or {}).get("name") == wilderness_area
 
     def pass_accessible(t):
         return not accessible_only or t.get("accessibility") == "ACCESSIBLE"
@@ -358,6 +426,7 @@ def search(
         "month": pass_month,
         "activity": pass_activity,
         "wilderness": pass_wilderness,
+        "wilderness_area": pass_wilderness_area,
         "accessible": pass_accessible,
     }
 
@@ -398,6 +467,8 @@ def search(
         steepness_pool=counted_for("steepness"),
         features_pool=counted_for("features"),
         route_pool=counted_for("route_type"),
+        wilderness_pool=counted_for("wilderness_area"),
+        activity_pool=counted_for("activity"),
     )
 
     reverse = True
@@ -428,7 +499,7 @@ def search(
         "offset": offset,
         "limit": limit,
         "facets": facets,
-        "results": [_public(t) for t in page],
+        "results": [_list_public(t) for t in page],
     }
 
 
@@ -438,6 +509,8 @@ def _facets(
     steepness_pool: list[dict] | None = None,
     features_pool: list[dict] | None = None,
     route_pool: list[dict] | None = None,
+    wilderness_pool: list[dict] | None = None,
+    activity_pool: list[dict] | None = None,
 ) -> dict:
     """Counts for the filter UI.
 
@@ -449,6 +522,8 @@ def _facets(
     difficulty_counts: dict[str, int] = {}
     steepness_counts: dict[str, int] = {}
     route_counts: dict[str, int] = {}
+    wilderness_counts: dict[str, int] = {}
+    activity_counts: dict[str, int] = {}
     unknown_elevation = 0
 
     for trail in features_pool if features_pool is not None else trails:
@@ -472,7 +547,21 @@ def _facets(
         if route:
             route_counts[route] = route_counts.get(route, 0) + 1
 
+    for trail in wilderness_pool if wilderness_pool is not None else trails:
+        area = (trail.get("wilderness") or {}).get("name")
+        if area:
+            wilderness_counts[area] = wilderness_counts.get(area, 0) + 1
+
+    for trail in activity_pool if activity_pool is not None else trails:
+        for name, predicate in ACTIVITY_PREDICATES.items():
+            if predicate(trail):
+                activity_counts[name] = activity_counts.get(name, 0) + 1
+
     return {
+        "activity": {k: activity_counts.get(k, 0) for k in ACTIVITY_PREDICATES},
+        "wilderness_area": dict(
+            sorted(wilderness_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ),
         "features": dict(sorted(feature_counts.items(), key=lambda kv: -kv[1])),
         "difficulty": {k: difficulty_counts.get(k, 0) for k in DIFFICULTY_ORDER},
         "steepness": {k: steepness_counts.get(k, 0) for k in STEEPNESS_ORDER},
@@ -511,10 +600,45 @@ _PUBLIC_FIELDS = (
     "access",
     "technical",
     "permits",
+    # Land status: designated wilderness, with the permit facility that governs it.
+    "wilderness",
+    # The point to draw on the map — on the trail, unlike `center`.
+    "marker",
     "network",
     "website",
     "wikipedia",
 )
+
+
+# What a result card and the comparison tray actually render. Measured: the full
+# projection ships 290 KB for 60 results, 203 KB of which is `nearby`, `permits` and
+# `access` — fields no list row displays. That payload was paid on every pan.
+# The detail panel fetches the complete record from /trail/{id} when one is opened.
+_LIST_FIELDS = (
+    "id",
+    "name",
+    "slug",
+    "length_miles",
+    "route_type",
+    "gain_ft",
+    "max_elevation_ft",
+    "min_elevation_ft",
+    "difficulty",
+    "steepness",
+    "features",
+    "mgmt_area",
+    "bbox",
+    "center",
+    "source",
+    # `map_dots` builds its points from this projection, so the marker has to
+    # survive it. ~60 bytes a row, against the 3.4 KB a row it replaces.
+    "marker",
+)
+
+
+def _list_public(trail: dict) -> dict:
+    """The lean projection for search results."""
+    return {key: trail.get(key) for key in _LIST_FIELDS if key in trail}
 
 
 def _public(trail: dict) -> dict:
@@ -535,18 +659,104 @@ def bounds_of(trails: list[dict]) -> list[float] | None:
     ]
 
 
+def map_dots(
+    bbox: list[float] | None = None,
+    limit: int = 20000,
+    **filters,
+) -> dict:
+    """One point per trail: the browse view, without loading any geometry.
+
+    Measured on this index, for a dense Sierra viewport of 320 trails:
+
+        full geometry   7.90 MB   206,311 coordinates
+        dots            0.07 MB   111x smaller
+
+    Every trail in California as dots is 2.43 MB — under a third of what a single
+    dense viewport costs today at full resolution.
+
+    The reason this matters more than the byte count: `center` lives in the search
+    index, which is already resident, so this path never calls `load_geometry()`.
+    That function parses a 167 MB file into ~945 MB of Python objects, which is most
+    of the backend's ~1 GB footprint. Browsing therefore stops paying for geometry
+    at all — it is fetched per trail, on demand, when someone actually wants a line.
+
+    Properties are kept to what the map needs to draw and label a dot. Anything
+    else is a per-trail lookup, because 10,694 of a field is 10,694 copies of it.
+    """
+    result = search(bbox=bbox, limit=limit, **filters)
+
+    features = []
+    unmappable = 0
+    for trail in result["results"]:
+        # `marker` sits on the trail; `center` is a bounding-box midpoint that can
+        # be miles off it. Fall back only for records built before markers existed.
+        marker = trail.get("marker") or {}
+        center = marker.get("point") or trail.get("center")
+        if not center:
+            # No centroid, so no dot. Counted rather than dropped silently, and
+            # never emitted as [0, 0] — that would place the trail off West Africa.
+            unmappable += 1
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "id": trail["id"],
+                "geometry": {"type": "Point", "coordinates": center},
+                "properties": {
+                    "id": trail["id"],
+                    "name": trail["name"],
+                    "length_miles": trail.get("length_miles"),
+                    "gain_ft": trail.get("gain_ft"),
+                    "difficulty": (trail.get("difficulty") or {}).get("label"),
+                    # Distinguishes a surveyed trailhead from an approximate
+                    # on-line point, which changes how the dot should be drawn.
+                    # Everything else arrives with the hover fetch anyway.
+                    "marker_kind": marker.get("kind"),
+                },
+            }
+        )
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        # `total` agrees with /search so the two endpoints never disagree about how
+        # many trails matched. `truncated` means specifically "the cap hid some" —
+        # deriving it from total > returned would also fire when a trail simply has
+        # no centroid, telling the user results were capped when they were not.
+        "total": result["total"],
+        "returned": len(features),
+        "truncated": result["total"] > limit,
+        "unmappable": unmappable,
+    }
+
+
 def map_features(
     bbox: list[float] | None = None,
     limit: int = 400,
+    detail: str = "z12",
     **filters,
 ) -> dict:
-    """GeoJSON FeatureCollection for the map, honoring the same filters as search."""
+    """GeoJSON FeatureCollection for the map, honoring the same filters as search.
+
+    Geometry comes from the store one trail at a time, at a level of detail matched
+    to the zoom. Reading the JSON sidecar instead would parse 167 MB into ~945 MB of
+    Python objects to draw a few hundred lines, which is the cost the dots view was
+    built to avoid — and it would come straight back the moment someone zoomed in.
+
+    `z12` is the default because that is roughly where lines replace dots: 17,476
+    coordinates for a dense viewport against 206,311 at full resolution, and the
+    difference is under two screen pixels.
+    """
     result = search(bbox=bbox, limit=limit, **filters)
-    geometry = load_geometry()
+    use_store = geom_store.available()
+    geometry = None if use_store else load_geometry()
 
     features = []
     for trail in result["results"]:
-        entry = geometry.get(trail["id"]) or {}
+        if use_store:
+            entry = geom_store.get(trail["id"], detail) or {}
+        else:
+            entry = geometry.get(trail["id"]) or {}
         geom = entry.get("geometry")
         if not geom:
             continue
@@ -562,6 +772,9 @@ def map_features(
                     "gain_ft": trail.get("gain_ft"),
                     "difficulty": (trail.get("difficulty") or {}).get("label"),
                     "features": ",".join(trail.get("features") or []),
+                    # Name only, not the whole block: map properties stay small
+                    # because 400 of them ship on every viewport change.
+                    "wilderness": (trail.get("wilderness") or {}).get("name"),
                 },
             }
         )

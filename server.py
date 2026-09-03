@@ -44,6 +44,12 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(trips_router)
 app.include_router(discovery_router)
+
+# Optional: build the routing graph during startup rather than inside the first
+# request that needs it. Off unless GRAPH_PREWARM is set — see graph_service.
+from planner import graph_service as _graph_service  # noqa: E402
+
+_graph_service.prewarm()
 app.include_router(planner_router)
 
 

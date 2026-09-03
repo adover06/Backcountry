@@ -224,6 +224,47 @@ def fetch_pois(
     return pois
 
 
+# Two sources naming the same summit should be one entry. Rounding coordinates to a
+# grid looked simpler and is wrong: 36.5785 and 36.57852 are 2 m apart and land in
+# different cells, so the duplicate survives. Identity has to be a real distance.
+DEDUPE_RADIUS_MI = 0.3
+
+
+def merge_pois(primary: list[dict], supplement: list[dict]) -> list[dict]:
+    """Add supplemental POIs, dropping ones the primary source already has.
+
+    GNIS is primary because it is public domain and filtered exactly to California.
+    OSM supplements it with categories GNIS does not record at all — `viewpoint`,
+    `cave`, `glacier` — and with peaks GNIS missed.
+
+    Two POIs are the same feature when they share a kind and sit within
+    `DEDUPE_RADIUS_MI`, and either share a name or the supplement is unnamed. An
+    unnamed OSM peak beside a named GNIS one is the same mountain, so it is dropped
+    rather than shown twice; a *differently* named peak that close is kept, because
+    summits do cluster and the names are the evidence they are distinct.
+    """
+    grid = PointGrid()
+    for poi in primary:
+        grid.add(poi["lat"], poi["lng"], {"kind": poi.get("kind"), "name": poi.get("name")})
+
+    merged = list(primary)
+    for poi in supplement:
+        name = (poi.get("name") or "").strip().lower()
+        duplicate = False
+        for hit in grid.near(poi["lat"], poi["lng"], DEDUPE_RADIUS_MI):
+            if hit.get("kind") != poi.get("kind"):
+                continue
+            hit_name = (hit.get("name") or "").strip().lower()
+            if not name or not hit_name or name == hit_name:
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        grid.add(poi["lat"], poi["lng"], {"kind": poi.get("kind"), "name": poi.get("name")})
+        merged.append(poi)
+    return merged
+
+
 def build_poi_grid(pois: list[dict]) -> PointGrid:
     grid = PointGrid()
     for poi in pois:
@@ -348,6 +389,11 @@ def fetch_hiking_ways(
                     "sac_scale": tags.get("sac_scale"),
                     "trail_visibility": tags.get("trail_visibility"),
                     "surface": tags.get("surface"),
+                    # The whole tag dict, because deciding whether a named way is a
+                    # trail or a sidewalk needs `footway`, `service` and `area`,
+                    # and assembling trails needs `operator`. Tiles cache the raw
+                    # Overpass elements, so this costs nothing on a cached run.
+                    "tags": tags,
                     "coordinates": [[p["lon"], p["lat"]] for p in geometry],
                 }
             )

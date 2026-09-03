@@ -33,6 +33,9 @@ from .elevation import elevation_for_geometry
 from .enrich_osm import CALIFORNIA_BBOX, build_poi_grid, enrich_trail, fetch_pois
 from .access import enrich_all as enrich_access
 from .permits import MissingKey as PermitsMissingKey
+from .wilderness import enrich_all as enrich_wilderness
+from .markers import enrich_all as enrich_markers
+from .osm_trails import assemble as assemble_osm_trails, dedupe_against
 from .permits import enrich_all as enrich_permits
 from .technical import enrich_all as enrich_technical
 from .gnis import fetch_features as fetch_gnis_features
@@ -67,7 +70,7 @@ def _split_record(trail: dict) -> tuple[dict, dict]:
 
 def stage_normalize(source: str | None, limit: int | None, verbose: bool) -> list[dict]:
     if verbose:
-        print("\n[1/3] normalize — reading USFS trail segments")
+        print("\n[normalize]   USFS trail segments")
     trails = normalize_trails(source)
     if limit:
         trails = trails[:limit]
@@ -84,7 +87,7 @@ def stage_nps(trails: list[dict], verbose: bool) -> list[dict]:
     with USFS `trail_cn` values.
     """
     if verbose:
-        print("\n[1b] nps — National Park Service trails")
+        print("\n[nps]         National Park Service trails")
     try:
         features = fetch_nps_trails(verbose=verbose)
         nps_trails = normalize_nps(features, verbose=verbose)
@@ -120,7 +123,7 @@ def stage_osm_routes(trails: list[dict], verbose: bool) -> list[dict]:
     Skipped silently when the osmium extract is absent; it is an optional stage.
     """
     if verbose:
-        print("\n[1c] osm — long-distance route relations")
+        print("\n[osm-routes]  long-distance route relations")
     try:
         routes = build_osm_routes(verbose=verbose)
     except FileNotFoundError as exc:
@@ -143,7 +146,7 @@ def stage_elevation(trails: list[dict], workers: int, verbose: bool) -> list[dic
     """Sample the DEM for every trail that does not already have elevation."""
     pending = [t for t in trails if not t.get("elevation")]
     if verbose:
-        print(f"\n[2/3] elevation — DEM sampling {len(pending)} trails ({workers} workers)")
+        print(f"\n[elevation]   DEM sampling {len(pending)} trails ({workers} workers)")
     if not pending:
         return trails
 
@@ -179,9 +182,15 @@ def stage_osm(trails: list[dict], bbox, step: float, verbose: bool, use_osm: boo
     GNIS is the primary source: it is public domain, needs no key, is not rate
     limited, and filters exactly to California. Overpass repeatedly timed out during
     development, so OSM is supplemental and off by default (`--with-osm`).
+
+    Note the control flow: this fetches **only when `pois.json` is absent**. Once
+    that file exists, the `--with-osm` branch is unreachable, which is why an OSM
+    supplement never entered a resumed build. The supplement is now run explicitly
+    and merged into `pois.json` (see `enrich_osm.merge_pois`), so the cached file is
+    GNIS + OSM and this stage just reads it.
     """
     if verbose:
-        print("\n[3/3] scenery — GNIS named features")
+        print("\n[scenery]     GNIS + OSM named features")
 
     pois: list[dict] = []
     if POI_PATH.exists():
@@ -239,7 +248,7 @@ def stage_osm(trails: list[dict], bbox, step: float, verbose: bool, use_osm: boo
 def stage_access(trails: list[dict], geometries: dict, verbose: bool) -> list[dict]:
     """Attach trailheads, parking and water — where a hike actually starts."""
     if verbose:
-        print("\n[4/4] access — NPS trailheads and parking")
+        print("\n[access]      trailheads, parking, water, camping (NPS + USFS + OSM)")
     try:
         return enrich_access(trails, geometries, verbose=verbose)
     except Exception as exc:
@@ -255,7 +264,7 @@ def stage_technical(trails: list[dict], geometries: dict, verbose: bool) -> list
     the coverage is not random: mappers tag it where a trail stops being a walk.
     """
     if verbose:
-        print("\n[5/5] technical — OSM sac_scale / trail_visibility flags")
+        print("\n[technical]   OSM sac_scale / trail_visibility flags")
     try:
         return enrich_technical(trails, geometries, verbose=verbose)
     except FileNotFoundError as exc:
@@ -275,13 +284,87 @@ def stage_permits(trails: list[dict], geometries: dict, verbose: bool) -> list[d
     needs a credential.
     """
     if verbose:
-        print("\n[6/6] permits — Recreation.gov (RIDB)")
+        print("\n[permits]     Recreation.gov (RIDB)")
     try:
         return enrich_permits(trails, geometries, verbose=verbose)
     except PermitsMissingKey as exc:
         if verbose:
             print(f"      skipped: {exc}")
         return trails
+    except Exception as exc:
+        if verbose:
+            print(f"      failed ({exc}) — continuing")
+        return trails
+
+
+def stage_wilderness(trails: list[dict], geometries: dict, verbose: bool) -> list[dict]:
+    """Mark trails inside designated wilderness.
+
+    Land status, not proximity: the boundary polygon answers it outright, where
+    `stage_permits` can only say a permit desk is nearby. Wilderness implies quota
+    entry, group-size caps and a mechanised-transport ban, none of which the trail
+    geometry knows.
+    """
+    if verbose:
+        print("\n[wilderness]  USFS designated boundaries")
+    try:
+        return enrich_wilderness(trails, geometries, verbose=verbose)
+    except Exception as exc:
+        if verbose:
+            print(f"      failed ({exc}) — continuing")
+        return trails
+
+
+# Where the OSM way sweep leaves its output. Written by `osm_trails_fetch`, read
+# here; the fetch is far too slow to hide inside a build.
+OSM_WAYS_PATH = DATA_DIR / "osm_ways.json"
+
+
+def stage_osm_trails(trails: list[dict], verbose: bool) -> list[dict]:
+    """Add trails assembled from named OSM ways.
+
+    Closes the structural gap in the two federal sources: USFS and NPS between them
+    cover national forest and park land, and most Californians walk on regional,
+    county and state park land that neither publishes. Measured on the South Bay,
+    the index held 15 trails where OSM has 4,415 named ways.
+
+    Runs before elevation so the new trails get a DEM pass like any other, and
+    before access/markers/wilderness so they are enriched identically. Skipped
+    cleanly when the sweep has not been run.
+    """
+    if not OSM_WAYS_PATH.exists():
+        if verbose:
+            print("\n[osm-trails]  skipped — run `python -m pipeline.osm_trails`")
+        return trails
+
+    if verbose:
+        print("\n[osm-trails]  named OSM ways assembled into trails")
+    try:
+        ways = json.loads(OSM_WAYS_PATH.read_text())
+        assembled = assemble_osm_trails(ways, verbose=verbose)
+        fresh = dedupe_against(assembled, trails, verbose=verbose)
+        # Drop any that a previous run already added, so the stage is idempotent.
+        known = {t["id"] for t in trails}
+        fresh = [t for t in fresh if t["id"] not in known]
+        if verbose:
+            print(f"  {len(fresh)} new trails added ({len(trails)} -> {len(trails) + len(fresh)})")
+        return trails + fresh
+    except Exception as exc:
+        if verbose:
+            print(f"      failed ({exc}) — continuing")
+        return trails
+
+
+def stage_markers(trails: list[dict], geometries: dict, verbose: bool) -> list[dict]:
+    """Pick the point that represents each trail on the map.
+
+    Must run after `stage_access`, because a joined trailhead is the preferred
+    marker and only exists once access enrichment has run.
+    """
+    if verbose:
+        print("\n[markers]     map point per trail (trailhead, else on-line midpoint)")
+    try:
+        return enrich_markers(trails, geometries, verbose=verbose)
     except Exception as exc:
         if verbose:
             print(f"      failed ({exc}) — continuing")
@@ -302,9 +385,18 @@ def write_outputs(trails: list[dict], verbose: bool) -> None:
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "count": len(records),
         "sources": {
-            "trails": "USFS National Forest + NPS Public Trails + SEKI (California)",
+            "trails": (
+                "USFS National Forest + NPS Public Trails + SEKI + "
+                "OpenStreetMap (California)"
+            ),
             "elevation": "AWS Terrarium DEM (~30 m)",
             "scenery": "USGS GNIS named features (public domain)",
+            "access": (
+                "NPS Public POIs + USFS INFRA recreation sites "
+                "+ OpenStreetMap (ODbL)"
+            ),
+            "wilderness": "USFS EDW designated wilderness boundaries",
+            "permits": "Recreation.gov (RIDB)",
         },
         "trails": records,
     }
@@ -349,6 +441,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-access", action="store_true")
     parser.add_argument("--skip-technical", action="store_true")
     parser.add_argument("--skip-permits", action="store_true")
+    parser.add_argument("--skip-wilderness", action="store_true")
+    parser.add_argument("--skip-markers", action="store_true")
+    parser.add_argument("--skip-osm-trails", action="store_true")
     parser.add_argument("--skip-osm", action="store_true")
     parser.add_argument("--with-osm", action="store_true", help="also query Overpass (slow, flaky)")
     parser.add_argument("--resume", action="store_true", help="reuse the previous build")
@@ -372,6 +467,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_osm_routes:
         trails = stage_osm_routes(trails, verbose)
 
+    if not args.skip_osm_trails:
+        trails = stage_osm_trails(trails, verbose)
+
     if not args.skip_elevation:
         trails = stage_elevation(trails, args.workers, verbose)
     if not args.skip_osm:
@@ -389,6 +487,14 @@ def main(argv: list[str] | None = None) -> int:
         geometries = {t["id"]: {"geometry": t.get("geometry")} for t in trails}
         trails = stage_permits(trails, geometries, verbose)
 
+    if not args.skip_wilderness:
+        geometries = {t["id"]: {"geometry": t.get("geometry")} for t in trails}
+        trails = stage_wilderness(trails, geometries, verbose)
+
+    if not args.skip_markers:
+        geometries = {t["id"]: {"geometry": t.get("geometry")} for t in trails}
+        trails = stage_markers(trails, geometries, verbose)
+
     write_outputs(trails, verbose)
 
     if verbose:
@@ -401,8 +507,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  trails            {len(trails)}")
         for source, count in sources.most_common():
             print(f"    {source:<32} {count}")
+        with_th = sum(1 for t in trails if (t.get("access") or {}).get("trailhead"))
+        with_camp = sum(1 for t in trails if (t.get("access") or {}).get("campground"))
+        with_wild = sum(1 for t in trails if (t.get("wilderness") or {}).get("name"))
         print(f"  with elevation    {with_elev}")
         print(f"  with scenery tags {with_feat}")
+        print(f"  with trailhead    {with_th}")
+        print(f"  with campground   {with_camp}")
+        print(f"  in wilderness     {with_wild}")
     return 0
 
 

@@ -11,6 +11,7 @@ build, and failures are recorded rather than retried on every call.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -41,6 +42,23 @@ def get_graph():
             _error = str(exc)
             return None
     return _graph
+
+
+def prewarm() -> bool:
+    """Build the graph in the background at startup, if the operator asked for it.
+
+    Off by default, and deliberately so. Building takes ~55s on the current index
+    and the finished graph holds ~1.8 GB resident — more than the whole rest of the
+    process. On a small VPS that is the difference between running and being
+    OOM-killed, so paying it eagerly has to be a choice rather than a default.
+
+    Set `GRAPH_PREWARM=1` where there is memory to spare: the build then happens
+    while the container is starting instead of inside the first user's request.
+    """
+    if os.environ.get("GRAPH_PREWARM", "").strip().lower() not in {"1", "true", "yes"}:
+        return False
+    threading.Thread(target=get_graph, name="graph-prewarm", daemon=True).start()
+    return True
 
 
 def status() -> dict:
@@ -101,12 +119,20 @@ def compose(
             ),
         }
 
-    # Collapse the repeated trail names a path picks up when it crosses the same
-    # trail several times: ["JMT", "JMT", "Mist", "JMT"] -> ["JMT", "Mist", "JMT"].
+    # Names come from the merged legs, not the raw per-edge list. Collapsing only
+    # *consecutive* duplicates is not enough: where a long-distance route is mapped
+    # over the same ground as the local trail, the raw list alternates A,B,A,B and
+    # a 17 mi hike listed 80 names. The legs have already absorbed those flips.
+    legs = hike.get("legs") or []
     names: list[str] = []
-    for name in hike["trail_names"]:
-        if not names or names[-1] != name:
+    for leg in legs:
+        name = leg.get("name")
+        if name and name != "connector" and (not names or names[-1] != name):
             names.append(name)
+    if not names:
+        for name in hike["trail_names"]:
+            if not names or names[-1] != name:
+                names.append(name)
 
     return {
         "ok": True,
@@ -116,9 +142,24 @@ def compose(
         "gain_ft_one_way": hike.get("gain_ft_one_way"),
         "route_type": hike["route_type"],
         "trail_names": names,
-        "segments_used": hike["segments_used"],
+        # The merged legs, not the raw per-edge count. `trail_ids` counts every
+        # edge-level trail change including the concurrent-route flips the legs
+        # absorb, which reported 80 for a hike made of 8 pieces.
+        "segments_used": len(hike.get("legs") or []) or hike["segments_used"],
         "node_count": hike.get("node_count", 0),
         "geometry": {"type": "LineString", "coordinates": hike["coordinates"]},
+        # The same route, split where it changes trail. `geometry` above is the
+        # whole line and cannot show that a 13.9 mi hike is four trails in a row;
+        # these can be drawn and labelled one by one.
+        "segments": [
+            {
+                "trail_id": leg["trail_id"],
+                "name": leg["name"],
+                "miles": leg["miles"],
+                "geometry": {"type": "LineString", "coordinates": leg["coordinates"]},
+            }
+            for leg in hike.get("legs") or []
+        ],
         "snapped": {
             "start": list(graph.node_coord.get(start_node, ())),
             "end": list(graph.node_coord.get(end_node, ())),

@@ -1,5 +1,23 @@
 # OpenTrails Repo Handoff
 
+> **STALE — read `HANDOFF.md` first.** This file describes an earlier version of the
+> product: a 7-step GPX planning wizard whose sidebar/report layout has since been
+> replaced by the map-first Discover app. Specific things below that are no longer
+> true:
+>
+> - `alltrails_manual_collection/` **does not exist**. There is no AllTrails
+>   ingestion path; AllTrails has no public API and its terms forbid scraping.
+> - `data.py` loading `National_Forest_System_Trails_(Feature_Layer) (3).geojson`
+>   directly has been replaced by the build pipeline in `pipeline/`, which writes
+>   `data/trails_index.json` and `data/trails_geom.json`.
+> - The API surface below (`/api/route/parse`, `/api/plan`, ...) is the planner
+>   wizard's. Current discovery routes live in `discovery_api.py`.
+> - The "Important Known Bug" about snow `depth_in` vs `max_depth_in` predates the
+>   risk-engine work; verify against the code before acting on it.
+>
+> The conventions section and the external-API notes are still broadly accurate.
+> `HANDOFF.md` is the maintained document.
+
 This is the working context file for the entire repository. It is meant to let another model or harness take over without re-discovering the project structure, conventions, or current implementation state.
 
 ## One-Line Summary

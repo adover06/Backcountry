@@ -214,11 +214,21 @@ data/trails_index.json
 data/trails_geom.json
 data/pois.json
 
+# Geometry store — build artefact, regenerate with `python -m pipeline.geom_store`
+data/trails_geom.sqlite
+
+# Sweep outputs — large, regenerable, and shipped to servers alongside the index
+# rather than through git (`python -m pipeline.osm_trails` / `.osm_access`).
+data/osm_ways.json
+data/osm_access_points.json
+data/pois.json.pre-osm
+
 # Pipeline network caches — rebuildable
 .dem_cache/
 .osm_cache/
 .gnis_cache/
 .nps_cache/
+.usfs_cache/
 
 # Wikimedia Commons photo lookups — rebuildable cache
 .photo_cache/

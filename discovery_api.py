@@ -29,6 +29,11 @@ router = APIRouter(prefix="/api/discover", tags=["discovery"])
 MAX_LIMIT = 200
 MAX_MAP_FEATURES = 600
 
+# Dots carry one coordinate instead of a full line, so the cap can be the whole
+# index: all 10,694 trails as points is 2.43 MB, against 7.90 MB for a single dense
+# viewport at full geometry.
+MAX_DOT_FEATURES = 20000
+
 
 def _parse_range(raw: Optional[str], name: str) -> list[float] | None:
     """Parse a 'min,max' query parameter. Either side may be blank for open-ended."""
@@ -93,6 +98,7 @@ def _common_filters(
     month: Optional[int],
     activity: Optional[str],
     wilderness: bool,
+    wilderness_area: Optional[str],
     accessible: bool,
 ) -> dict:
     if month is not None and not 1 <= month <= 12:
@@ -114,6 +120,7 @@ def _common_filters(
         "month": month,
         "activity": activity,
         "wilderness_only": wilderness,
+        "wilderness_area": wilderness_area,
         "accessible_only": accessible,
     }
 
@@ -146,6 +153,7 @@ async def discovery_search(
     month: Optional[int] = Query(None, description="1-12, filters by seasonal access"),
     activity: Optional[str] = Query(None, description="hiking, bike, horse, ..."),
     wilderness: bool = False,
+    wilderness_area: Optional[str] = Query(None, description="exact designated wilderness name"),
     accessible: bool = False,
     sort: str = "relevance",
     limit: int = 50,
@@ -158,7 +166,7 @@ async def discovery_search(
 
     filters = _common_filters(
         q, bbox, length, gain, elevation, difficulty, steepness, features,
-        features_mode, route_type, month, activity, wilderness, accessible,
+        features_mode, route_type, month, activity, wilderness, wilderness_area, accessible,
     )
 
     try:
@@ -184,8 +192,15 @@ async def discovery_map(
     month: Optional[int] = Query(None),
     activity: Optional[str] = Query(None),
     wilderness: bool = False,
+    wilderness_area: Optional[str] = Query(None, description="exact designated wilderness name"),
     accessible: bool = False,
     limit: int = 400,
+    detail: str = Query(
+        "z12",
+        pattern="^(full|z14|z12|z10)$",
+        description="geometry level of detail; z12 is ~11x smaller than full and "
+        "within two screen pixels at the zoom where lines replace dots",
+    ),
     user: Optional[User] = Depends(get_current_user_optional),
 ):
     """GeoJSON for the map, using the same filters as /search.
@@ -196,10 +211,49 @@ async def discovery_map(
     limit = max(1, min(limit, MAX_MAP_FEATURES))
     filters = _common_filters(
         q, bbox, length, gain, elevation, difficulty, steepness, features,
-        features_mode, route_type, month, activity, wilderness, accessible,
+        features_mode, route_type, month, activity, wilderness, wilderness_area, accessible,
     )
     try:
-        return discover.map_features(limit=limit, **filters)
+        return discover.map_features(limit=limit, detail=detail, **filters)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/dots")
+@limiter.limit("120/minute")
+async def discovery_dots(
+    request: Request,
+    q: str = "",
+    bbox: Optional[str] = Query(None),
+    length: Optional[str] = Query(None),
+    gain: Optional[str] = Query(None),
+    elevation: Optional[str] = Query(None),
+    difficulty: Optional[str] = Query(None),
+    steepness: Optional[str] = Query(None),
+    features: Optional[str] = Query(None),
+    features_mode: str = "any",
+    route_type: Optional[str] = Query(None),
+    month: Optional[int] = Query(None),
+    activity: Optional[str] = Query(None),
+    wilderness: bool = False,
+    wilderness_area: Optional[str] = Query(None, description="exact designated wilderness name"),
+    accessible: bool = False,
+    limit: int = MAX_DOT_FEATURES,
+    user: Optional[User] = Depends(get_current_user_optional),
+):
+    """One point per trail, for the zoomed-out browse view.
+
+    Same filters as /search and /map. Unlike /map this never loads the geometry
+    sidecar, so it neither pays the 2.3s parse nor holds ~945 MB of coordinates
+    resident. Fetch a line from /trail/{id}/geometry when one is actually needed.
+    """
+    limit = max(1, min(limit, MAX_DOT_FEATURES))
+    filters = _common_filters(
+        q, bbox, length, gain, elevation, difficulty, steepness, features,
+        features_mode, route_type, month, activity, wilderness, wilderness_area, accessible,
+    )
+    try:
+        return discover.map_dots(limit=limit, **filters)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -282,7 +336,10 @@ async def discovery_trail_photos(
 
     from pipeline.photos import get_photos
 
-    entry = discover.get_geometry(trail_id) or {}
+    # Photos are matched by proximity along the line, so a simplified geometry is
+    # as good as the full one and much cheaper. (This endpoint has no `detail`
+    # query parameter — it is not the caller's choice.)
+    entry = discover.get_geometry(trail_id, detail="z12") or {}
     return get_photos(trail_id, entry.get("geometry"), trail)
 
 
@@ -292,6 +349,12 @@ async def discovery_trail(
     request: Request,
     trail_id: str,
     include_geometry: bool = True,
+    detail: str = Query(
+        "full",
+        pattern="^(full|z14|z12|z10)$",
+        description="geometry level of detail; z10 is ~28x smaller and "
+        "indistinguishable below zoom 11",
+    ),
     user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Full detail for one trail, including elevation profile and geometry."""
@@ -303,7 +366,7 @@ async def discovery_trail(
         raise HTTPException(status_code=404, detail="Trail not found")
 
     payload = discover._public(trail)
-    entry = discover.get_geometry(trail_id) or {}
+    entry = discover.get_geometry(trail_id, detail=detail) or {}
     if include_geometry:
         payload["geometry"] = entry.get("geometry")
     if entry.get("profile"):

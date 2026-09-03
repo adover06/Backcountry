@@ -354,14 +354,21 @@ class TrailGraph:
 
         trails: list[str] = []
         path: list = [target]
+        # The trail each hop was walked on, aligned so edge_trails[i] is the edge
+        # path[i] -> path[i + 1]. The collapsed `trails` list below loses where one
+        # trail stops and the next starts, which is exactly what a caller needs to
+        # draw the composition rather than a single anonymous line.
+        edge_trails: list[str] = []
         node = target
         while node in previous:
             node, trail_id = previous[node]
             path.append(node)
+            edge_trails.append(trail_id)
             if trail_id != "__stitch__" and (not trails or trails[-1] != trail_id):
                 trails.append(trail_id)
         trails.reverse()
         path.reverse()
+        edge_trails.reverse()
 
         gain_ft, loss_ft = self._path_gain(path)
 
@@ -375,10 +382,116 @@ class TrailGraph:
             # Drawable geometry that follows the trail, assembled from the edge
             # shapes rather than joining node positions.
             "coordinates": self._path_shape(path),
+            # The same route split by trail, so each part can be drawn and named.
+            "legs": self._split_into_legs(path, edge_trails, distances),
             "profile": [
                 {"ft": round(self.node_ele[n])} for n in path if n in self.node_ele
             ],
         }
+
+    def _split_into_legs(self, path: list, edge_trails: list[str], distances: dict) -> list[dict]:
+        """Group a node path into runs that stay on one trail.
+
+        A composed hike is only legible if you can see *which* trail each part of it
+        is — "13.9 mi" says nothing about the fact that it is four trails in a row.
+        One merged line cannot show that, so each run carries its own drawable
+        geometry and the trail it belongs to.
+
+        Runs are keyed by trail *name*, not trail id. Sources overlap: Happy Isles
+        to Half Dome alternates between two distinct records both called "John Muir
+        Trail", which by id is 90 legs and by name is 4. The id split is real but it
+        describes who published the geometry, not which trail a walker is on, and
+        the walker's question is the one worth answering here.
+
+        Leg mileage is read off the Dijkstra distances rather than re-measured, so
+        the legs sum to the route total exactly.
+        """
+        def key(trail_id: str) -> str:
+            return self.trail_names.get(trail_id) or trail_id
+
+        runs: list[dict] = []
+        for i, trail_id in enumerate(edge_trails):
+            # A stitch is a metres-long join between two agencies' endpoints, not a
+            # trail anyone walks as a named thing. It extends the run it lands in.
+            if runs and (trail_id == "__stitch__" or runs[-1]["name"] == key(trail_id)):
+                runs[-1]["nodes"].append(path[i + 1])
+            elif runs and runs[-1]["trail_id"] == "__stitch__":
+                # A route that opened on a stitch has no name yet; the first real
+                # trail claims it.
+                runs[-1].update(trail_id=trail_id, name=key(trail_id))
+                runs[-1]["nodes"].append(path[i + 1])
+            else:
+                runs.append(
+                    {
+                        "trail_id": trail_id,
+                        "name": key(trail_id),
+                        "nodes": [path[i], path[i + 1]],
+                    }
+                )
+
+        # Concurrent routes are the reason this pass exists. A long-distance
+        # relation ("Bay Area Ridge Trail") is mapped over the same ground as the
+        # local trail it follows, so consecutive edges flip between two records and
+        # a 17 mi hike came back as 80 legs alternating every 0.02 mi. Absorbing
+        # runs shorter than a stride into their larger neighbour reports what the
+        # walker experiences: one trail, which happens to carry two names.
+        MIN_LEG_MILES = 0.15
+
+        legs: list[dict] = []
+        for run in runs:
+            coordinates = self._path_shape(run["nodes"])
+            if len(coordinates) < 2:
+                continue
+            start_mi = distances.get(run["nodes"][0], 0.0)
+            end_mi = distances.get(run["nodes"][-1], start_mi)
+            legs.append(
+                {
+                    "trail_id": run["trail_id"],
+                    "name": "connector" if run["trail_id"] == "__stitch__" else run["name"],
+                    "miles": round(max(0.0, end_mi - start_mi), 2),
+                    "coordinates": coordinates,
+                }
+            )
+
+        return self._absorb_short_legs(legs, MIN_LEG_MILES)
+
+    @staticmethod
+    def _absorb_short_legs(legs: list[dict], minimum: float) -> list[dict]:
+        """Merge sub-stride legs into the larger neighbour, shortest first.
+
+        Shortest-first matters: absorbing in path order lets one long trail swallow
+        a genuine short connector that a later, larger neighbour should have taken.
+        A single leg is never absorbed — a 0.1 mi walk is still the whole walk.
+        """
+        legs = [dict(leg) for leg in legs]
+
+        while len(legs) > 1:
+            index = min(range(len(legs)), key=lambda i: legs[i]["miles"])
+            if legs[index]["miles"] >= minimum:
+                break
+
+            before = legs[index - 1] if index > 0 else None
+            after = legs[index + 1] if index + 1 < len(legs) else None
+            # Prefer the bigger neighbour; it is the trail the walker is really on.
+            target = before if after is None else after if before is None else (
+                before if before["miles"] >= after["miles"] else after
+            )
+            victim = legs.pop(index)
+            target["miles"] = round(target["miles"] + victim["miles"], 2)
+            if target is before:
+                target["coordinates"] = target["coordinates"] + victim["coordinates"]
+            else:
+                target["coordinates"] = victim["coordinates"] + target["coordinates"]
+
+        # Adjacent legs can share a name once the flips between them are gone.
+        merged: list[dict] = []
+        for leg in legs:
+            if merged and merged[-1]["name"] == leg["name"]:
+                merged[-1]["miles"] = round(merged[-1]["miles"] + leg["miles"], 2)
+                merged[-1]["coordinates"] = merged[-1]["coordinates"] + leg["coordinates"]
+                continue
+            merged.append(leg)
+        return merged
 
     def _path_shape(self, path: list) -> list[list[float]]:
         """Trace the real trail vertices along a node path.
@@ -451,6 +564,7 @@ class TrailGraph:
             "segments_used": len(leg["trail_ids"]),
             "route_type": "out-and-back" if out_and_back else "point-to-point",
             "coordinates": leg.get("coordinates") or [],
+            "legs": leg.get("legs") or [],
             "node_count": leg.get("node_count", 0),
         }
 
