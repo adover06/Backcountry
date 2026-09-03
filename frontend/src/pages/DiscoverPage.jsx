@@ -1201,6 +1201,7 @@ export default function DiscoverPage() {
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState(null);
   const planModeRef = useRef(false);
+  const clusterHoverRef = useRef(null);
   useEffect(() => {
     planModeRef.current = planMode;
     if (map.current) {
@@ -1356,7 +1357,11 @@ export default function DiscoverPage() {
       const clusterInk = isDark ? "#5fbf8c" : "#3aa568";
       const clusterInkLow = isDark ? "#31694f" : "#9fd9ba";
       const clusterInkHigh = isDark ? "#8ee6b4" : "#1d7a45";
-      const clusterText = isDark ? "#eafff3" : "#062514";
+      const clusterText = isDark ? "#04140c" : "#052018";
+      // A light edge separates the mark from hillshade in dark mode; a darker one
+      // does the same job over pale terrain. Both are defined, per theme.
+      const clusterEdge = isDark ? "rgba(255,255,255,0.42)" : "rgba(4,26,18,0.30)";
+      const clusterHalo = isDark ? "rgba(140,230,196,0.55)" : "rgba(255,255,255,0.85)";
       const labelInk = isDark ? "#e8f2ec" : "#12261b";
       const labelHalo = isDark ? "rgba(6,14,10,0.85)" : "rgba(255,255,255,0.9)";
       try {
@@ -1416,6 +1421,57 @@ export default function DiscoverPage() {
         },
       });
 
+      // Shared geometry so the halo, body, ring and hit area stay concentric.
+      // Area tracks count, not radius: doubling the radius quadruples apparent
+      // size and badly overstates a small difference.
+      const clusterRadius = [
+        "interpolate", ["linear"], ["sqrt", ["get", "point_count"]],
+        1, 10, 4, 15, 10, 20, 30, 27,
+      ];
+      const clusterDensity = [
+        "interpolate", ["linear"], ["get", "point_count"],
+        1, clusterInkLow, 100, clusterInk, 800, clusterInkHigh,
+      ];
+      // Paint transitions are how Mapbox animates; 180ms sits inside the
+      // 150-300ms band for micro-interactions, and drops to 0 when the viewer
+      // has asked for reduced motion.
+      const motion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? { duration: 0, delay: 0 }
+        : { duration: 180, delay: 0 };
+
+      // Invisible, and the only layer that takes pointer events. A 12-trail
+      // cluster draws at 20px across, well under the 44px touch minimum, so the
+      // hit area is sized independently of the mark. Same trick as `trails-hit`.
+      map.current.addLayer({
+        id: "trail-dots-cluster-hit",
+        type: "circle",
+        source: "trail-dots",
+        maxzoom: DOT_ZOOM_MAX,
+        filter: ["has", "point_count"],
+        paint: {
+          "circle-color": "#000",
+          "circle-opacity": 0,
+          "circle-radius": ["max", ["+", clusterRadius, 8], 22],
+        },
+      });
+
+      // Bloom. Gives the mark depth against hillshade without the hard edge of a
+      // second ring, and lets the terrain read through the soft part.
+      map.current.addLayer({
+        id: "trail-dots-cluster-glow",
+        type: "circle",
+        source: "trail-dots",
+        maxzoom: DOT_ZOOM_MAX,
+        filter: ["has", "point_count"],
+        paint: {
+          "circle-color": clusterDensity,
+          "circle-blur": 1,
+          "circle-opacity": 0.42,
+          "circle-radius": ["*", clusterRadius, 1.85],
+          "circle-radius-transition": motion,
+        },
+      });
+
       map.current.addLayer({
         id: "trail-dots-cluster",
         type: "circle",
@@ -1423,22 +1479,34 @@ export default function DiscoverPage() {
         maxzoom: DOT_ZOOM_MAX,
         filter: ["has", "point_count"],
         paint: {
-          // Density reads through value, not size alone: a sparse cluster stays
-          // translucent and lets the terrain through, a dense one darkens.
-          "circle-color": [
-            "interpolate", ["linear"], ["get", "point_count"],
-            1, clusterInkLow, 100, clusterInk, 800, clusterInkHigh,
-          ],
-          "circle-opacity": 0.62,
-          // Area, not radius, tracks count — doubling the radius quadruples the
-          // apparent size and badly overstates a small difference. Kept small on
-          // purpose: these sat on top of the map and buried the hillshade.
-          "circle-radius": [
-            "interpolate", ["linear"], ["sqrt", ["get", "point_count"]],
-            1, 9, 4, 14, 10, 19, 30, 26,
-          ],
-          "circle-stroke-width": 1,
-          "circle-stroke-color": "rgba(255,255,255,0.28)",
+          // Density reads through value as well as size. The count itself is the
+          // non-colour carrier, so the scale never has to be read on its own.
+          "circle-color": clusterDensity,
+          // Near-solid, unlike the old 0.62: the count sits on this, and text on
+          // a translucent fill over terrain cannot hold 4.5:1.
+          "circle-opacity": 0.94,
+          "circle-radius": clusterRadius,
+          "circle-stroke-width": 1.25,
+          "circle-stroke-color": clusterEdge,
+          "circle-radius-transition": motion,
+        },
+      });
+
+      // Hover ring. Driven by a filter rather than feature-state, matching the
+      // existing `trails-highlight` layer — feature-state is unreliable here.
+      map.current.addLayer({
+        id: "trail-dots-cluster-ring",
+        type: "circle",
+        source: "trail-dots",
+        maxzoom: DOT_ZOOM_MAX,
+        filter: ["==", ["get", "cluster_id"], -1],
+        paint: {
+          "circle-color": "rgba(0,0,0,0)",
+          "circle-radius": ["+", clusterRadius, 5],
+          "circle-stroke-width": 2,
+          "circle-stroke-color": clusterInkHigh,
+          "circle-stroke-opacity": 0.9,
+          "circle-radius-transition": motion,
         },
       });
 
@@ -1450,14 +1518,15 @@ export default function DiscoverPage() {
         filter: ["has", "point_count"],
         layout: {
           "text-field": ["get", "point_count_abbreviated"],
-          "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
-          "text-size": ["interpolate", ["linear"], ["get", "point_count"], 1, 11, 500, 15],
+          "text-font": ["DIN Offc Pro Bold", "Arial Unicode MS Bold"],
+          "text-size": ["interpolate", ["linear"], ["sqrt", ["get", "point_count"]], 1, 11.5, 6, 14, 30, 17],
           "text-allow-overlap": true,
+          "text-ignore-placement": true,
         },
         paint: {
           "text-color": clusterText,
-          "text-halo-color": labelHalo,
-          "text-halo-width": 1,
+          "text-halo-color": clusterHalo,
+          "text-halo-width": 0.9,
         },
       });
 
@@ -1684,7 +1753,7 @@ export default function DiscoverPage() {
 
       // Clicking a cluster zooms to the level where it breaks apart, which is the
       // only useful thing a cluster can do.
-      map.current.on("click", "trail-dots-cluster", (e) => {
+      map.current.on("click", "trail-dots-cluster-hit", (e) => {
         const feature = e.features?.[0];
         const clusterId = feature?.properties?.cluster_id;
         const source = map.current.getSource("trail-dots");
@@ -1698,11 +1767,19 @@ export default function DiscoverPage() {
           });
         });
       });
-      map.current.on("mouseenter", "trail-dots-cluster", () => {
+      map.current.on("mousemove", "trail-dots-cluster-hit", (e) => {
         map.current.getCanvas().style.cursor = "pointer";
+        const id = e.features?.[0]?.properties?.cluster_id;
+        if (id == null || id === clusterHoverRef.current) return;
+        clusterHoverRef.current = id;
+        // The ring says "this one expands if you click"; it is the only motion
+        // here, and it reports a state rather than decorating.
+        map.current.setFilter("trail-dots-cluster-ring", ["==", ["get", "cluster_id"], id]);
       });
-      map.current.on("mouseleave", "trail-dots-cluster", () => {
+      map.current.on("mouseleave", "trail-dots-cluster-hit", () => {
         map.current.getCanvas().style.cursor = "";
+        clusterHoverRef.current = null;
+        map.current.setFilter("trail-dots-cluster-ring", ["==", ["get", "cluster_id"], -1]);
       });
 
       // Placing route points. Registered on the map rather than a layer, because
